@@ -110,8 +110,8 @@ export class ContentStreamParser {
     pageDict: PdfDict,
     streamDataList: { data: Uint8Array; streamIndex: number }[]
   ): { page: PageModel; objects: EditableObject[] } {
-    // 1. Resolve MediaBox, CropBox, Rotation
-    const mediaBoxObj = this.parser.resolve(pageDict.get('MediaBox'));
+    // 1. Resolve MediaBox, CropBox, Rotation (with parent dictionary inheritance)
+    const mediaBoxObj = this.getInheritedAttribute(pageDict, 'MediaBox');
     let mediaBox: [number, number, number, number] = [0, 0, 612, 792]; // default Letter
     if (Array.isArray(mediaBoxObj) && mediaBoxObj.length >= 4) {
       mediaBox = [
@@ -122,7 +122,7 @@ export class ContentStreamParser {
       ];
     }
 
-    const cropBoxObj = this.parser.resolve(pageDict.get('CropBox'));
+    const cropBoxObj = this.getInheritedAttribute(pageDict, 'CropBox');
     let cropBox: [number, number, number, number] | undefined;
     if (Array.isArray(cropBoxObj) && cropBoxObj.length >= 4) {
       cropBox = [
@@ -133,11 +133,12 @@ export class ContentStreamParser {
       ];
     }
 
-    const rotateObj = pageDict.get('Rotate');
+    const rotateObj = this.getInheritedAttribute(pageDict, 'Rotate');
     const rotation = typeof rotateObj === 'number' ? rotateObj : 0;
 
-    const width = Math.abs(mediaBox[2] - mediaBox[0]);
-    const height = Math.abs(mediaBox[3] - mediaBox[1]);
+    const effectiveBox = cropBox || mediaBox;
+    const width = Math.abs(effectiveBox[2] - effectiveBox[0]);
+    const height = Math.abs(effectiveBox[3] - effectiveBox[1]);
 
     const pageModel: PageModel = {
       pageIndex,
@@ -152,7 +153,7 @@ export class ContentStreamParser {
     };
 
     // 2. Resolve Page Resources (Fonts, XObjects)
-    const resources = this.parser.resolve(pageDict.get('Resources'));
+    const resources = this.getInheritedAttribute(pageDict, 'Resources');
     const fontDict = resources instanceof PdfDict ? this.parser.resolve(resources.get('Font')) : null;
     const xobjDict = resources instanceof PdfDict ? this.parser.resolve(resources.get('XObject')) : null;
 
@@ -519,8 +520,23 @@ export class ContentStreamParser {
           }
         }
 
-        // --- Vector Path & Shape Operators ---
-        else if (op === 're' && args.length === 4) {
+        // --- Vector Path Operators (m, l, c, v, y, re, h, S, s, f, F, f*, B, b, B*, b*, n) ---
+        else if (op === 'm' && args.length >= 2) {
+          const pt = CoordinateSystem.transformPoint({ x: Number(args[0]), y: Number(args[1]) }, state.ctm);
+          currentPathPoints.push(pt);
+        } else if (op === 'l' && args.length >= 2) {
+          const pt = CoordinateSystem.transformPoint({ x: Number(args[0]), y: Number(args[1]) }, state.ctm);
+          currentPathPoints.push(pt);
+        } else if (op === 'c' && args.length >= 6) {
+          const pt = CoordinateSystem.transformPoint({ x: Number(args[4]), y: Number(args[5]) }, state.ctm);
+          currentPathPoints.push(pt);
+        } else if (op === 'h') {
+          if (currentPathPoints.length > 0) {
+            currentPathPoints.push(currentPathPoints[0]);
+          }
+        } else if (op === 'n') {
+          currentPathPoints = [];
+        } else if (op === 're' && args.length === 4) {
           const rx = Number(args[0]);
           const ry = Number(args[1]);
           const rw = Number(args[2]);
@@ -531,43 +547,44 @@ export class ContentStreamParser {
           ];
         } else if ((op === 'f' || op === 'F' || op === 'f*' || op === 'S' || op === 's' || op === 'B' || op === 'B*' || op === 'b' || op === 'b*') && currentPathPoints.length >= 2) {
           flushActiveText();
-          const p1 = currentPathPoints[0];
-          const p2 = currentPathPoints[1];
-          const minX = Math.min(p1.x, p2.x);
-          const minY = Math.min(p1.y, p2.y);
-          const w = Math.abs(p2.x - p1.x);
-          const h = Math.abs(p2.y - p1.y);
-
-          // Only keep substantial shapes to prevent cluttering tiny path accents
-          if (w > 2 && h > 2) {
-            const isFill = op.toLowerCase().includes('f') || op.toLowerCase().includes('b');
-            const isStroke = op.toLowerCase().includes('s') || op.toLowerCase().includes('b');
-
-            const shape: ShapeObject = {
-              id: `shape_${pageIndex}_${objectCounter++}`,
-              type: 'shape',
-              origin: 'pdf_source',
-              pageIndex,
-              pdfBounds: { x: minX, y: minY, width: w, height: h },
-              matrix: [...state.ctm],
-              rotation: 0,
-              zIndex: objects.length + 1,
-              opacity: 1,
-              visible: true,
-              locked: false,
-              shapeType: 'rect',
-              strokeColor: isStroke ? state.strokeColor : 'transparent',
-              fillColor: isFill ? state.fillColor : undefined,
-              strokeWidth: state.lineWidth || 1,
-              sourcePdfRef: {
-                streamIndex,
-                startOpIndex: opIdx - 1,
-                endOpIndex: opIdx,
-                originalOpName: op,
-              },
-            };
-            objects.push(shape);
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const pt of currentPathPoints) {
+            minX = Math.min(minX, pt.x);
+            minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x);
+            maxY = Math.max(maxY, pt.y);
           }
+
+          const w = Math.max(1, maxX - minX);
+          const h = Math.max(1, maxY - minY);
+
+          const isFill = op.toLowerCase().includes('f') || op.toLowerCase().includes('b');
+          const isStroke = op.toLowerCase().includes('s') || op.toLowerCase().includes('b');
+
+          const shape: ShapeObject = {
+            id: `shape_${pageIndex}_${objectCounter++}`,
+            type: 'shape',
+            origin: 'pdf_source',
+            pageIndex,
+            pdfBounds: { x: minX, y: minY, width: w, height: h },
+            matrix: [...state.ctm],
+            rotation: 0,
+            zIndex: objects.length + 1,
+            opacity: 1,
+            visible: true,
+            locked: false,
+            shapeType: 'rect',
+            strokeColor: isStroke ? state.strokeColor : 'transparent',
+            fillColor: isFill ? state.fillColor : undefined,
+            strokeWidth: Math.max(0.5, state.lineWidth || 1),
+            sourcePdfRef: {
+              streamIndex,
+              startOpIndex: opIdx - 1,
+              endOpIndex: opIdx,
+              originalOpName: op,
+            },
+          };
+          objects.push(shape);
           currentPathPoints = [];
         }
       }
@@ -823,5 +840,21 @@ export class ContentStreamParser {
       // fallback
     }
     return '';
+  }
+
+  /**
+   * Resolves an inherited attribute by walking up the /Parent tree (for MediaBox, CropBox, Resources, Rotate)
+   */
+  private getInheritedAttribute(pageDict: PdfDict, key: string): PdfObject | undefined {
+    let current: PdfDict | null = pageDict;
+    while (current) {
+      const val = this.parser.resolve(current.get(key));
+      if (val !== undefined && val !== null) {
+        return val;
+      }
+      const parent = this.parser.resolve(current.get('Parent'));
+      current = parent instanceof PdfDict ? parent : null;
+    }
+    return undefined;
   }
 }

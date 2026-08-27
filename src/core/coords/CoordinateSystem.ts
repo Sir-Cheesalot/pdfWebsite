@@ -10,22 +10,22 @@ export class CoordinateSystem {
   }
 
   /**
-   * Multiply two 3x3 affine matrices: A x B
-   * [ a1 c1 e1 ]   [ a2 c2 e2 ]
-   * [ b1 d1 f1 ] x [ b2 d2 f2 ]
-   * [ 0  0  1  ]   [ 0  0  1  ]
+   * Multiply two PDF 3x3 affine matrices: A x B (row-vector convention)
+   * [ a1 b1 0 ]   [ a2 b2 0 ]
+   * [ c1 d1 0 ] x [ c2 d2 0 ]
+   * [ e1 f1 1 ]   [ e2 f2 1 ]
    */
   static multiply(m1: Matrix2D, m2: Matrix2D): Matrix2D {
     const [a1, b1, c1, d1, e1, f1] = m1;
     const [a2, b2, c2, d2, e2, f2] = m2;
 
     return [
-      a1 * a2 + c1 * b2,
-      b1 * a2 + d1 * b2,
-      a1 * c2 + c1 * d2,
-      b1 * c2 + d1 * d2,
-      a1 * e2 + c1 * f2 + e1,
-      b1 * e2 + d1 * f2 + f1,
+      a1 * a2 + b1 * c2,
+      a1 * b2 + b1 * d2,
+      c1 * a2 + d1 * c2,
+      c1 * b2 + d1 * d2,
+      e1 * a2 + f1 * c2 + e2,
+      e1 * b2 + f1 * d2 + f2,
     ];
   }
 
