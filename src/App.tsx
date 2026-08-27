@@ -390,32 +390,6 @@ export const App: React.FC = () => {
         'STATE',
         `Document state: 100% unedited (${totalParsedObjs} objects displaying original PDF drawing instructions)`
       );
-
-      // Auto-run OCR reconciliation if page contains corrupted or exotic characters
-      const firstPage = loadedDoc.pages[0];
-      const hasExotic = firstPage?.objects.some(
-        (o) => o.type === 'text' && OcrVerificationEngine.containsExoticChars((o as TextObject).text)
-      );
-
-      if (firstPage && hasExotic) {
-        setIsOcrRunning(true);
-        setOcrProgressMsg('Auto-fixing corrupted equation & font symbols with OCR...');
-        addLog('INFO', 'Exotic character patterns detected; launching visual OCR verification...');
-        FullPageOcrReconciler.reconcilePage(firstPage, (msg) => setOcrProgressMsg(msg))
-          .then(({ updatedPage, stats }) => {
-            setDoc((currentDoc) => {
-              const updatedPages = [...currentDoc.pages];
-              updatedPages[0] = updatedPage;
-              return { ...currentDoc, pages: updatedPages };
-            });
-            addLog('STATE', `OCR scan completed: Replaced ${stats.replacedCount} corrupted glyphs`);
-          })
-          .catch((e) => console.warn('Auto-OCR background check warning:', e))
-          .finally(() => {
-            setIsOcrRunning(false);
-            setOcrProgressMsg('');
-          });
-      }
     } catch (err) {
       console.error('Failed to open PDF:', err);
       addLog('WARN', `Failed to open PDF: ${err}`);
