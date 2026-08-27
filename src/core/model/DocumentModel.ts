@@ -67,6 +67,7 @@ export class DocumentModelManager {
       fonts,
       isDirty: false,
       activePageIndex: 0,
+      originalPdfBytes: uint8,
     };
 
     return { doc, parser };
