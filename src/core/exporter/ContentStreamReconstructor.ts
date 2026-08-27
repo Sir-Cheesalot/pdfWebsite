@@ -98,9 +98,11 @@ export class ContentStreamReconstructor {
 
         let skipUntilOpIndex = -1;
 
+        let inText = false;
         for (let i = 0; i < streamOps.length; i++) {
           if (i <= skipUntilOpIndex) continue;
 
+          const op = streamOps[i];
           const trackedObj = trackedForStream.get(i);
 
           if (trackedObj && trackedObj.sourcePdfRef) {
@@ -113,9 +115,7 @@ export class ContentStreamReconstructor {
 
             const wasEdited = trackedObj.isModified === true;
             if (!wasEdited) {
-              // Byte-exact passthrough of the untouched original span, covering
-              // every operator (and any operators belonging to content that was
-              // merged into this logical object, e.g. consolidated text lines).
+              // Byte-exact passthrough of the untouched original span
               const startOp = streamOps[i];
               const endOp = streamOps[Math.min(endIdx, streamOps.length - 1)];
               if (
@@ -125,8 +125,6 @@ export class ContentStreamReconstructor {
                 pushRaw(data.subarray(startOp.startByte, endOp.endByte));
                 pushRaw(NEWLINE);
               } else {
-                // Byte offsets unavailable (shouldn't happen with the current
-                // parser) - fall back to re-serializing rather than dropping data.
                 const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
                 if (opString) {
                   pushText(opString);
@@ -134,6 +132,12 @@ export class ContentStreamReconstructor {
                 }
               }
             } else {
+              // Edited: close any in-flight text block first to prevent nested BT
+              if (inText) {
+                pushText('ET');
+                pushRaw(NEWLINE);
+                inText = false;
+              }
               const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
               if (opString) {
                 pushText(opString);
@@ -141,9 +145,14 @@ export class ContentStreamReconstructor {
               }
             }
           } else {
-            // Untracked operator (not part of any editable object, e.g. bare
-            // graphics state ops) - pass through byte-exact as well.
-            const op = streamOps[i];
+            // Track inText state on untracked operators to avoid redundant ET
+            if (op.op === 'BT') {
+              inText = true;
+            } else if (op.op === 'ET') {
+              if (!inText) continue; // skip unmatched ET
+              inText = false;
+            }
+
             if (typeof op.startByte === 'number' && typeof op.endByte === 'number') {
               pushRaw(data.subarray(op.startByte, op.endByte));
               pushRaw(NEWLINE);
@@ -155,6 +164,10 @@ export class ContentStreamReconstructor {
               }
             }
           }
+        }
+        if (inText) {
+          pushText('ET');
+          pushRaw(NEWLINE);
         }
       }
 
@@ -218,9 +231,8 @@ export class ContentStreamReconstructor {
 
     lines.push('BT'); // Begin Text
 
-    // Font selection: use existing key or default standard font /F_Helvetica
-    let fontKey = textObj.pdfFontKey || '/F_Helv';
-    if (!fontKey.startsWith('/')) fontKey = '/' + fontKey;
+    // Font selection: use standard 1-byte WinAnsi font /F_Helv for newly edited/created text
+    const fontKey = '/F_Helv';
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
 
     // Character spacing & leading

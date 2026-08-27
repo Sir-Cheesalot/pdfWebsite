@@ -101,7 +101,7 @@ export class PdfWriter {
     this.writeString('%PDF-1.7\n%\xE2\xE3\xCF\xD3\n');
 
     let nextObjNum = 1;
-    const objectMap = new Map<number, { dict?: PdfDict; stream?: PdfStream; rawStr?: string }>();
+    const objectMap = new Map<number, { dict?: PdfDict; stream?: PdfStream; array?: PdfArray; primitive?: PdfObject; rawStr?: string }>();
     const allocNum = () => nextObjNum++;
 
     // 2. Catalog & Pages objects
@@ -222,10 +222,11 @@ export class PdfWriter {
         objectMap.set(newNum, { stream: copied });
       } else if (copied instanceof PdfDict) {
         objectMap.set(newNum, { dict: copied });
+      } else if (Array.isArray(copied)) {
+        objectMap.set(newNum, { array: copied });
+      } else if (copied !== undefined && copied !== null) {
+        objectMap.set(newNum, { primitive: copied });
       }
-      // Primitive top-level indirect objects (rare) are silently dropped;
-      // PDF spec allows most object types to be indirect, but resources are
-      // virtually always dicts or streams in practice.
     }
 
     // 4. Pages Root Object
@@ -251,6 +252,12 @@ export class PdfWriter {
         this.writeStreamObject(objNum, entry.stream);
       } else if (entry?.dict) {
         this.writeDictObject(objNum, entry.dict);
+      } else if (entry?.array) {
+        this.writeArrayObject(objNum, entry.array);
+      } else if (entry?.primitive !== undefined) {
+        this.writeString(`${objNum} 0 obj\n`);
+        this.writeObject(entry.primitive);
+        this.writeString('\nendobj\n\n');
       }
     }
 
@@ -327,6 +334,12 @@ export class PdfWriter {
   private writeDictObject(objNum: number, dict: PdfDict) {
     this.writeString(`${objNum} 0 obj\n`);
     this.writeDict(dict);
+    this.writeString('\nendobj\n\n');
+  }
+
+  private writeArrayObject(objNum: number, arr: PdfArray) {
+    this.writeString(`${objNum} 0 obj\n`);
+    this.writeObject(arr);
     this.writeString('\nendobj\n\n');
   }
 
