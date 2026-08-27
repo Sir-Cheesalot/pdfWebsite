@@ -183,33 +183,46 @@ export class FontEngine {
     const bfrangeBlocks = text.match(/beginbfrange([\s\S]*?)endbfrange/g);
     if (bfrangeBlocks) {
       for (const block of bfrangeBlocks) {
-        // Continuous range: <start> <end> <startUni>
-        const regex = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g;
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(block)) !== null) {
-          const startCode = parseInt(m[1], 16);
-          const endCode = parseInt(m[2], 16);
-          const startUniHex = m[3];
+        const lines = block.replace(/beginbfrange|endbfrange/g, '').trim().split('\n');
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
 
-          if (startUniHex.length <= 4) {
-            let startUni = parseInt(startUniHex, 16);
-            for (let code = startCode; code <= endCode; code++) {
-              map.set(code, String.fromCharCode(startUni));
-              startUni++;
+          // Array form: <start> <end> [ <uni1> <uni2> ... ]
+          const arrayMatch = line.match(/^<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*\[([\s\S]*?)\]/);
+          if (arrayMatch) {
+            const startCode = parseInt(arrayMatch[1], 16);
+            const hexList = arrayMatch[3].match(/<([0-9a-fA-F]+)>/g);
+            if (hexList) {
+              for (let i = 0; i < hexList.length; i++) {
+                const hexVal = hexList[i].replace(/[<>]/g, '');
+                map.set(startCode + i, this.decodeHexToUnicode(hexVal));
+              }
             }
+            continue;
           }
-        }
 
-        // Range with array of target hex values: <start> <end> [ <uni1> <uni2> ... ]
-        const arrRegex = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*\[([\s\S]*?)\]/g;
-        let arrM: RegExpExecArray | null;
-        while ((arrM = arrRegex.exec(block)) !== null) {
-          const startCode = parseInt(arrM[1], 16);
-          const hexList = arrM[3].match(/<([0-9a-fA-F]+)>/g);
-          if (hexList) {
-            for (let i = 0; i < hexList.length; i++) {
-              const hexVal = hexList[i].replace(/[<>]/g, '');
-              map.set(startCode + i, this.decodeHexToUnicode(hexVal));
+          // Single destination form: <start> <end> <dest>
+          const singleMatch = line.match(/^<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/);
+          if (singleMatch) {
+            const startCode = parseInt(singleMatch[1], 16);
+            const endCode = parseInt(singleMatch[2], 16);
+            const destHex = singleMatch[3];
+
+            if (destHex.length <= 4) {
+              let startUni = parseInt(destHex, 16);
+              for (let code = startCode; code <= endCode; code++) {
+                map.set(code, String.fromCharCode(startUni));
+                startUni++;
+              }
+            } else if (destHex.length === 8) {
+              const high = parseInt(destHex.slice(0, 4), 16);
+              const low = parseInt(destHex.slice(4, 8), 16);
+              const baseCodepoint = 0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
+              for (let code = startCode; code <= endCode; code++) {
+                const cp = baseCodepoint + (code - startCode);
+                map.set(code, String.fromCodePoint(cp));
+              }
             }
           }
         }
@@ -222,6 +235,17 @@ export class FontEngine {
   private decodeHexToUnicode(hex: string): string {
     if (hex.length <= 2) {
       return String.fromCharCode(parseInt(hex, 16));
+    }
+    if (hex.length === 4) {
+      return String.fromCharCode(parseInt(hex, 16));
+    }
+    if (hex.length === 8) {
+      const high = parseInt(hex.slice(0, 4), 16);
+      const low = parseInt(hex.slice(4, 8), 16);
+      if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) {
+        const cp = 0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
+        return String.fromCodePoint(cp);
+      }
     }
     let res = '';
     for (let i = 0; i < hex.length; i += 4) {
