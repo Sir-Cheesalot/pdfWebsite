@@ -155,6 +155,7 @@ export async function renderOriginalPdfPage(
   pageNumber: number,
   canvas: HTMLCanvasElement,
   scale: number,
+  onRenderTask?: (task: { cancel: () => void }) => void,
 ) {
   const task = getDocument({ data: new Uint8Array(source.slice(0)) });
   const pdf = await task.promise;
@@ -167,10 +168,14 @@ export async function renderOriginalPdfPage(
   canvas.style.height = `${viewport.height}px`;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas 2D context is unavailable.');
-  await (page as any).render({
+  const renderTask = (page as any).render({
     canvasContext: context,
     viewport,
     canvas,
     transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
-  }).promise;
+  });
+  if (onRenderTask) {
+    onRenderTask(renderTask);
+  }
+  await renderTask.promise;
 }
