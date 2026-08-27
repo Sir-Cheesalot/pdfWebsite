@@ -671,62 +671,8 @@ export class ContentStreamParser {
       lines.push(currentLine);
     }
 
-    // 2. Group consecutive lines into multi-line paragraph blocks
-    const paragraphs: TextObject[] = [];
-    let currentPara: TextObject | null = null;
-
-    for (const line of lines) {
-      if (!currentPara) {
-        currentPara = { ...line, runs: [...line.runs] };
-        continue;
-      }
-
-      const prevY = currentPara.pdfBounds.y;
-      const lineY = line.pdfBounds.y;
-      const lineGap = prevY - lineY; // drop in Y
-
-      const sameFont = currentPara.fontName === line.fontName;
-      const sameFontSize = Math.abs(currentPara.fontSize - line.fontSize) <= 1.5;
-      const sameColor = currentPara.fillColor === line.fillColor;
-
-      const isNormalLeading = lineGap >= 0.8 * currentPara.fontSize && lineGap <= 2.2 * currentPara.fontSize;
-      const isHorizontallyAligned = Math.abs(currentPara.pdfBounds.x - line.pdfBounds.x) <= 35;
-
-      if (sameFont && sameFontSize && sameColor && isNormalLeading && isHorizontallyAligned) {
-        currentPara.text += '\n' + line.text;
-        currentPara.runs.push(...line.runs);
-
-        const minX = Math.min(currentPara.pdfBounds.x, line.pdfBounds.x);
-        const maxX = Math.max(
-          currentPara.pdfBounds.x + currentPara.pdfBounds.width,
-          line.pdfBounds.x + line.pdfBounds.width
-        );
-        const minY = line.pdfBounds.y;
-        const maxY = currentPara.pdfBounds.y + currentPara.pdfBounds.height;
-
-        currentPara.pdfBounds = {
-          x: minX,
-          y: minY,
-          width: maxX - minX,
-          height: maxY - minY,
-        };
-
-        if (currentPara.sourcePdfRef && line.sourcePdfRef) {
-          currentPara.sourcePdfRef.endOpIndex = Math.max(
-            currentPara.sourcePdfRef.endOpIndex,
-            line.sourcePdfRef.endOpIndex
-          );
-        }
-      } else {
-        paragraphs.push(currentPara);
-        currentPara = { ...line, runs: [...line.runs] };
-      }
-    }
-    if (currentPara) {
-      paragraphs.push(currentPara);
-    }
-
-    const result: EditableObject[] = [...nonTextObjects, ...paragraphs];
+    // Return discrete horizontal line objects (no downward vertical merging)
+    const result: EditableObject[] = [...nonTextObjects, ...lines];
     result.forEach((obj, idx) => {
       obj.zIndex = idx + 1;
     });
