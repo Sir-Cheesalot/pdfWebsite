@@ -635,15 +635,16 @@ export class ContentStreamParser {
         continue;
       }
 
-      const sameBaseline = Math.abs(currentLine.pdfBounds.y - textObj.pdfBounds.y) <= Math.min(3, 0.3 * currentLine.fontSize);
+      const sameBaseline = Math.abs(currentLine.pdfBounds.y - textObj.pdfBounds.y) <= Math.min(2, 0.2 * currentLine.fontSize);
       const sameFont = currentLine.fontName === textObj.fontName;
-      const sameFontSize = Math.abs(currentLine.fontSize - textObj.fontSize) <= 1.5;
+      const sameFontSize = Math.abs(currentLine.fontSize - textObj.fontSize) <= 1.0;
       const sameColor = currentLine.fillColor === textObj.fillColor;
 
       const currentRight = currentLine.pdfBounds.x + currentLine.pdfBounds.width;
       const distance = textObj.pdfBounds.x - currentRight;
       const avgCharW = (currentLine.fontSize * 0.5) || 6;
-      const isAdjacent = distance >= -avgCharW * 0.8 && distance <= avgCharW * 4.0;
+      const maxSpaceGap = Math.min(6, 0.5 * currentLine.fontSize);
+      const isAdjacent = distance >= -avgCharW * 0.4 && distance <= maxSpaceGap;
 
       if (sameBaseline && sameFont && sameFontSize && sameColor && isAdjacent) {
         if (distance > 2 && !currentLine.text.endsWith(' ') && !textObj.text.startsWith(' ')) {

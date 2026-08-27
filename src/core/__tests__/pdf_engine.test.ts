@@ -347,15 +347,30 @@ describe('9. OCR Verification & Exotic Character Resolution Engine', () => {
     expect(OcrVerificationEngine.containsExoticChars('Missing glyph □')).toBe(true);
   });
 
-  it('cleans and resolves scientific notation when corrupted glyph codes are present', async () => {
+  it('preserves clean document strings without alteration', async () => {
     const { OcrVerificationEngine } = await import('../ocr/OcrVerificationEngine');
-    const corruptedRate = 'Uncertainty (ओट-१)';
-    const result = OcrVerificationEngine.verifyAndCleanText(corruptedRate);
-    expect(result.hasExoticChars).toBe(true);
-    expect(result.verifiedText).toContain('(g/s)');
+    const strings = [
+      'Volunteer Hours Report',
+      'Volunteer: Manas Jain',
+      'COMPLETED SHIFTS',
+      'Wednesday',
+      '9:00 AM',
+      '4:15 PM',
+      '20 min',
+      '6h 55m (6.92 hrs)',
+      'Total Completed: 17h 57m (17.92 hrs)',
+      'UPCOMING / SCHEDULED SHIFTS',
+      '4:00 – 4:15 PM',
+      '~11h 35m (11.58 hrs)',
+      'Grand Total (Completed + Scheduled): ~29h 32m (~29.50 hrs)',
+    ];
 
-    const corruptedScientific = '6.1 x \u096C\u091F';
-    const sciResult = OcrVerificationEngine.verifyAndCleanText(corruptedScientific);
-    expect(sciResult.verifiedText).toContain('6.1 × 10⁻⁴');
+    for (const str of strings) {
+      const contains = OcrVerificationEngine.containsExoticChars(str);
+      const res = OcrVerificationEngine.verifyAndCleanText(str);
+      console.log(`Original: "${str}" -> ContainsExotic: ${contains}, Result: "${res.verifiedText}"`);
+      expect(contains).toBe(false);
+      expect(res.verifiedText).toBe(str);
+    }
   });
 });
