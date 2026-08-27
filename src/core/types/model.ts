@@ -83,9 +83,11 @@ export interface TextObject extends BaseEditableObject {
   lineHeight: number;
   charSpacing: number;
   wordSpacing: number;
+  horizontalScale?: number;
   fillColor: string; // CSS color or hex
   strokeColor?: string;
   strokeWidth?: number;
+  cmykColor?: [number, number, number, number];
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -110,6 +112,8 @@ export interface ShapeObject extends BaseEditableObject {
   shapeType: ShapeType;
   strokeColor: string;
   fillColor?: string;
+  cmykFill?: [number, number, number, number];
+  cmykStroke?: [number, number, number, number];
   strokeWidth: number;
   dashArray?: number[];
   arrowStart?: boolean;
@@ -182,4 +186,5 @@ export interface DocumentModel {
   fonts: Map<string, FontDescriptorModel>;
   isDirty: boolean;
   activePageIndex: number;
+  originalPdfBytes?: Uint8Array;
 }

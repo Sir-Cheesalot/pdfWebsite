@@ -91,10 +91,20 @@ export class ContentStreamReconstructor {
           const endIdx = trackedObj.sourcePdfRef.endOpIndex;
           skipUntilOpIndex = endIdx;
 
-          if (trackedObj.visible) {
-            const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
-            if (opString) {
-              reconstructedStreamChunks.push(opString);
+          if (trackedObj.isModified || trackedObj.origin === 'user_created') {
+            if (trackedObj.visible) {
+              const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
+              if (opString) {
+                reconstructedStreamChunks.push(opString);
+              }
+            }
+          } else {
+            // UNTOUCHED: Pass through original operators verbatim without re-serialization
+            for (let opI = i; opI <= endIdx && opI < streamOps.length; opI++) {
+              const opStr = this.serializeSingleOperator(streamOps[opI]);
+              if (opStr) {
+                reconstructedStreamChunks.push(opStr);
+              }
             }
           }
         } else {
@@ -154,9 +164,13 @@ export class ContentStreamReconstructor {
     const lines: string[] = [];
     lines.push('q'); // save state
 
-    // Color
-    const rgb = this.parseColorToRgb(textObj.fillColor);
-    lines.push(`${(rgb.r / 255).toFixed(3)} ${(rgb.g / 255).toFixed(3)} ${(rgb.b / 255).toFixed(3)} rg`);
+    // Color: support CMYK and RGB
+    if (textObj.cmykColor && textObj.cmykColor.length === 4) {
+      lines.push(`${textObj.cmykColor.map((v) => v.toFixed(3)).join(' ')} k`);
+    } else {
+      const rgb = this.parseColorToRgb(textObj.fillColor);
+      lines.push(`${(rgb.r / 255).toFixed(3)} ${(rgb.g / 255).toFixed(3)} ${(rgb.b / 255).toFixed(3)} rg`);
+    }
 
     lines.push('BT'); // Begin Text
 
@@ -165,18 +179,24 @@ export class ContentStreamReconstructor {
     if (!fontKey.startsWith('/')) fontKey = '/' + fontKey;
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
 
-    // Character spacing & leading
-    if (textObj.charSpacing !== 0) {
+    // Character spacing, word spacing, horizontal scale & leading
+    if (textObj.charSpacing && textObj.charSpacing !== 0) {
       lines.push(`${textObj.charSpacing.toFixed(2)} Tc`);
+    }
+    if (textObj.wordSpacing && textObj.wordSpacing !== 0) {
+      lines.push(`${textObj.wordSpacing.toFixed(2)} Tw`);
+    }
+    if (textObj.horizontalScale && textObj.horizontalScale !== 100) {
+      lines.push(`${textObj.horizontalScale.toFixed(2)} Tz`);
     }
     if (textObj.lineHeight) {
       lines.push(`${textObj.lineHeight.toFixed(2)} TL`);
     }
 
-    // Set Text Matrix (Tm) to exact PDF position
+    // Set Text Matrix (Tm) to exact PDF baseline position
     const m = textObj.matrix;
     const posX = textObj.pdfBounds.x;
-    const posY = textObj.pdfBounds.y;
+    const posY = textObj.pdfBounds.y + 0.22 * textObj.fontSize;
     lines.push(`${m[0].toFixed(4)} ${m[1].toFixed(4)} ${m[2].toFixed(4)} ${m[3].toFixed(4)} ${posX.toFixed(2)} ${posY.toFixed(2)} Tm`);
 
     // Escape text string
@@ -235,13 +255,21 @@ export class ContentStreamReconstructor {
     const hasFill = shapeObj.fillColor && shapeObj.fillColor !== 'transparent';
 
     if (hasStroke) {
-      const sRgb = this.parseColorToRgb(shapeObj.strokeColor);
-      lines.push(`${(sRgb.r / 255).toFixed(3)} ${(sRgb.g / 255).toFixed(3)} ${(sRgb.b / 255).toFixed(3)} RG`);
+      if (shapeObj.cmykStroke && shapeObj.cmykStroke.length === 4) {
+        lines.push(`${shapeObj.cmykStroke.map((v) => v.toFixed(3)).join(' ')} K`);
+      } else {
+        const sRgb = this.parseColorToRgb(shapeObj.strokeColor);
+        lines.push(`${(sRgb.r / 255).toFixed(3)} ${(sRgb.g / 255).toFixed(3)} ${(sRgb.b / 255).toFixed(3)} RG`);
+      }
     }
 
     if (hasFill) {
-      const fRgb = this.parseColorToRgb(shapeObj.fillColor!);
-      lines.push(`${(fRgb.r / 255).toFixed(3)} ${(fRgb.g / 255).toFixed(3)} ${(fRgb.b / 255).toFixed(3)} rg`);
+      if (shapeObj.cmykFill && shapeObj.cmykFill.length === 4) {
+        lines.push(`${shapeObj.cmykFill.map((v) => v.toFixed(3)).join(' ')} k`);
+      } else {
+        const fRgb = this.parseColorToRgb(shapeObj.fillColor!);
+        lines.push(`${(fRgb.r / 255).toFixed(3)} ${(fRgb.g / 255).toFixed(3)} ${(fRgb.b / 255).toFixed(3)} rg`);
+      }
     }
 
     const { x, y, width: w, height: h } = shapeObj.pdfBounds;

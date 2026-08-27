@@ -122,6 +122,7 @@ export class EditTextCommand implements ICommand {
     const obj = nextDoc.pages[this.pageIndex]?.objects.find((o) => o.id === this.objectId);
     if (obj && obj.type === 'text') {
       obj.text = this.newText;
+      obj.isModified = true;
     }
     return nextDoc;
   }
@@ -196,6 +197,7 @@ export class ResizeObjectCommand implements ICommand {
       obj.pdfBounds = { ...this.newBounds };
       obj.matrix[4] = this.newBounds.x;
       obj.matrix[5] = this.newBounds.y;
+      obj.isModified = true;
     }
     return nextDoc;
   }
@@ -228,7 +230,7 @@ export class InsertObjectCommand implements ICommand {
     const nextDoc = cloneDoc(doc);
     const page = nextDoc.pages[this.pageIndex];
     if (page) {
-      page.objects.push({ ...this.object });
+      page.objects.push({ ...this.object, isModified: true });
     }
     return nextDoc;
   }
@@ -296,6 +298,7 @@ export class ChangeStyleCommand implements ICommand {
     const obj = nextDoc.pages[this.pageIndex]?.objects.find((o) => o.id === this.objectId);
     if (obj) {
       Object.assign(obj, this.newProps);
+      obj.isModified = true;
     }
     return nextDoc;
   }

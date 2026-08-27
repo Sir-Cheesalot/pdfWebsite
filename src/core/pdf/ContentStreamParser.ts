@@ -30,6 +30,8 @@ interface GraphicsState {
   ctm: Matrix2D;
   strokeColor: string;
   fillColor: string;
+  fillCmyk?: [number, number, number, number];
+  strokeCmyk?: [number, number, number, number];
   lineWidth: number;
   dashArray: number[];
 }
@@ -264,6 +266,22 @@ export class ContentStreamParser {
           // Stroke Grayscale
           const val = Math.round(Number(args[0]) * 255);
           state.strokeColor = `rgb(${val}, ${val}, ${val})`;
+        } else if (op === 'k' && args.length >= 4) {
+          // Fill CMYK
+          const c = Number(args[0]), m = Number(args[1]), y = Number(args[2]), k = Number(args[3]);
+          const r = Math.round(255 * (1 - c) * (1 - k));
+          const g = Math.round(255 * (1 - m) * (1 - k));
+          const b = Math.round(255 * (1 - y) * (1 - k));
+          state.fillColor = `rgb(${r}, ${g}, ${b})`;
+          state.fillCmyk = [c, m, y, k];
+        } else if (op === 'K' && args.length >= 4) {
+          // Stroke CMYK
+          const c = Number(args[0]), m = Number(args[1]), y = Number(args[2]), k = Number(args[3]);
+          const r = Math.round(255 * (1 - c) * (1 - k));
+          const g = Math.round(255 * (1 - m) * (1 - k));
+          const b = Math.round(255 * (1 - y) * (1 - k));
+          state.strokeColor = `rgb(${r}, ${g}, ${b})`;
+          state.strokeCmyk = [c, m, y, k];
         }
 
         // --- Text State Operators ---
@@ -383,7 +401,9 @@ export class ContentStreamParser {
                 lineHeight: currentLeading,
                 charSpacing,
                 wordSpacing,
+                horizontalScale,
                 fillColor: state.fillColor,
+                cmykColor: state.fillCmyk ? [...state.fillCmyk] : undefined,
                 bold: fontDesc?.name.toLowerCase().includes('bold') || false,
                 italic: fontDesc?.name.toLowerCase().includes('italic') || fontDesc?.name.toLowerCase().includes('oblique') || false,
                 underline: false,
@@ -472,7 +492,9 @@ export class ContentStreamParser {
               lineHeight: currentLeading,
               charSpacing,
               wordSpacing,
+              horizontalScale,
               fillColor: state.fillColor,
+              cmykColor: state.fillCmyk ? [...state.fillCmyk] : undefined,
               bold: fontDesc?.name.toLowerCase().includes('bold') || false,
               italic: fontDesc?.name.toLowerCase().includes('italic') || fontDesc?.name.toLowerCase().includes('oblique') || false,
               underline: false,
