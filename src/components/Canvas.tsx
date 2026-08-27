@@ -1,0 +1,465 @@
+// WYSIWYG Interactive PDF Canvas
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  EditableObject,
+  ImageObject,
+  PageModel,
+  Rect,
+  ShapeObject,
+  TableCell,
+  TableObject,
+  TextObject,
+} from '../core/types/model';
+import { CoordinateSystem } from '../core/coords/CoordinateSystem';
+import { ToolMode } from './Toolbar';
+
+interface CanvasProps {
+  page: PageModel;
+  zoom: number;
+  selectedObjectId: string | null;
+  currentTool: ToolMode;
+  onSelectObject: (id: string | null) => void;
+  onUpdateObject: (updated: Partial<EditableObject>) => void;
+  onCommitObjectMove: (objectId: string, dxPdf: number, dyPdf: number) => void;
+  onCommitObjectResize: (objectId: string, newBounds: Rect, oldBounds: Rect) => void;
+  onCommitTextEdit: (objectId: string, newText: string, oldText: string) => void;
+  onCommitTableCellEdit: (tableId: string, row: number, col: number, newText: string) => void;
+  onInsertNewObject: (obj: EditableObject) => void;
+  onSmartPush: (thresholdPdfY: number, deltaHeight: number, excludeId: string) => void;
+}
+
+type ResizeHandle = 'tl' | 'tc' | 'tr' | 'ml' | 'mr' | 'bl' | 'bc' | 'br' | 'rot';
+
+export const Canvas: React.FC<CanvasProps> = ({
+  page,
+  zoom,
+  selectedObjectId,
+  currentTool,
+  onSelectObject,
+  onUpdateObject,
+  onCommitObjectMove,
+  onCommitObjectResize,
+  onCommitTextEdit,
+  onCommitTableCellEdit,
+  onInsertNewObject,
+  onSmartPush,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [editingCell, setEditingCell] = useState<{ tableId: string; row: number; col: number } | null>(null);
+  const [activeDrag, setActiveDrag] = useState<{
+    type: 'move' | 'resize' | 'smart_push';
+    handle?: ResizeHandle;
+    startX: number;
+    startY: number;
+    initialBounds: Rect;
+    initialScreenBounds: Rect;
+  } | null>(null);
+
+  const selectedObject = page.objects.find((o) => o.id === selectedObjectId) || null;
+
+  // Screen dimensions of page
+  const pageWidthPx = page.width * zoom;
+  const pageHeightPx = page.height * zoom;
+
+  // Handle clicking on blank page area
+  const handlePageClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target !== containerRef.current && (e.target as HTMLElement).dataset.pageBackground !== 'true') {
+      return;
+    }
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const clickScreenX = e.clientX - rect.left;
+    const clickScreenY = e.clientY - rect.top;
+    const pdfPt = CoordinateSystem.screenToPdfPoint({ x: clickScreenX, y: clickScreenY }, page, zoom);
+
+    if (currentTool === 'text') {
+      // Insert new text object
+      const newText: TextObject = {
+        id: `txt_user_${Date.now()}`,
+        type: 'text',
+        origin: 'user_created',
+        pageIndex: page.pageIndex,
+        pdfBounds: { x: pdfPt.x, y: pdfPt.y, width: 140, height: 18 },
+        matrix: [1, 0, 0, 1, pdfPt.x, pdfPt.y],
+        rotation: 0,
+        zIndex: page.objects.length + 1,
+        opacity: 1,
+        visible: true,
+        locked: false,
+        text: 'Enter text here',
+        runs: [],
+        fontName: 'Helvetica',
+        fontSize: 14,
+        lineHeight: 18,
+        charSpacing: 0,
+        wordSpacing: 0,
+        fillColor: '#0f172a',
+        bold: false,
+        italic: false,
+        underline: false,
+        alignment: 'left',
+      };
+      onInsertNewObject(newText);
+      setEditingTextId(newText.id);
+    } else if (currentTool === 'shape_rect') {
+      const newShape: ShapeObject = {
+        id: `shape_user_${Date.now()}`,
+        type: 'shape',
+        origin: 'user_created',
+        pageIndex: page.pageIndex,
+        pdfBounds: { x: pdfPt.x, y: pdfPt.y - 60, width: 120, height: 60 },
+        matrix: [1, 0, 0, 1, pdfPt.x, pdfPt.y - 60],
+        rotation: 0,
+        zIndex: page.objects.length + 1,
+        opacity: 1,
+        visible: true,
+        locked: false,
+        shapeType: 'rect',
+        strokeColor: '#3b82f6',
+        fillColor: '#dbeafe',
+        strokeWidth: 2,
+      };
+      onInsertNewObject(newShape);
+    } else if (currentTool === 'smart_push') {
+      onSmartPush(pdfPt.y, 40, '');
+    } else {
+      onSelectObject(null);
+      setEditingTextId(null);
+      setEditingCell(null);
+    }
+  };
+
+  // Mouse drag handler for moving and resizing
+  const handleMouseDown = (e: React.MouseEvent, obj: EditableObject, handle?: ResizeHandle) => {
+    if (obj.locked || editingTextId === obj.id) return;
+    e.stopPropagation();
+
+    onSelectObject(obj.id);
+
+    const screenBounds = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
+    setActiveDrag({
+      type: handle ? 'resize' : 'move',
+      handle,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialBounds: { ...obj.pdfBounds },
+      initialScreenBounds: screenBounds,
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!activeDrag || !selectedObject) return;
+
+      const dxScreen = (e.clientX - activeDrag.startX) / zoom;
+      const dyScreen = (e.clientY - activeDrag.startY) / zoom;
+
+      if (activeDrag.type === 'move') {
+        // PDF Y axis is inverted relative to screen Y
+        const dxPdf = dxScreen;
+        const dyPdf = -dyScreen;
+
+        const newPdfX = activeDrag.initialBounds.x + dxPdf;
+        const newPdfY = activeDrag.initialBounds.y + dyPdf;
+
+        onUpdateObject({
+          pdfBounds: {
+            ...selectedObject.pdfBounds,
+            x: newPdfX,
+            y: newPdfY,
+          },
+          matrix: [
+            selectedObject.matrix[0],
+            selectedObject.matrix[1],
+            selectedObject.matrix[2],
+            selectedObject.matrix[3],
+            newPdfX,
+            newPdfY,
+          ],
+        });
+      } else if (activeDrag.type === 'resize' && activeDrag.handle) {
+        let newW = activeDrag.initialBounds.width;
+        let newH = activeDrag.initialBounds.height;
+        let newX = activeDrag.initialBounds.x;
+        let newY = activeDrag.initialBounds.y;
+
+        const h = activeDrag.handle;
+        if (h.includes('r')) newW = Math.max(15, activeDrag.initialBounds.width + dxScreen);
+        if (h.includes('b')) {
+          newH = Math.max(15, activeDrag.initialBounds.height + dyScreen);
+          newY = activeDrag.initialBounds.y - (newH - activeDrag.initialBounds.height);
+        }
+        if (h.includes('l')) {
+          const deltaW = dxScreen;
+          newW = Math.max(15, activeDrag.initialBounds.width - deltaW);
+          newX = activeDrag.initialBounds.x + deltaW;
+        }
+        if (h.includes('t')) {
+          const deltaH = -dyScreen;
+          newH = Math.max(15, activeDrag.initialBounds.height + deltaH);
+        }
+
+        onUpdateObject({
+          pdfBounds: { x: newX, y: newY, width: newW, height: newH },
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (activeDrag && selectedObject) {
+        if (activeDrag.type === 'move') {
+          const dxPdf = selectedObject.pdfBounds.x - activeDrag.initialBounds.x;
+          const dyPdf = selectedObject.pdfBounds.y - activeDrag.initialBounds.y;
+          if (Math.abs(dxPdf) > 0.1 || Math.abs(dyPdf) > 0.1) {
+            onCommitObjectMove(selectedObject.id, dxPdf, dyPdf);
+          }
+        } else if (activeDrag.type === 'resize') {
+          onCommitObjectResize(selectedObject.id, selectedObject.pdfBounds, activeDrag.initialBounds);
+        }
+      }
+      setActiveDrag(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [activeDrag, selectedObject, zoom, page]);
+
+  return (
+    <div className="flex-1 overflow-auto bg-slate-950 flex items-center justify-center p-8 relative select-none">
+      {/* Page Canvas Container */}
+      <div
+        ref={containerRef}
+        onClick={handlePageClick}
+        data-page-background="true"
+        style={{
+          width: `${pageWidthPx}px`,
+          height: `${pageHeightPx}px`,
+        }}
+        className="relative bg-white shadow-2xl rounded-xs ring-1 ring-slate-800 transition-all cursor-default"
+      >
+        {/* Render Editable Objects */}
+        {page.objects.map((obj) => {
+          if (!obj.visible) return null;
+          const screenRect = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
+          const isSelected = selectedObjectId === obj.id;
+          const isEditingText = editingTextId === obj.id;
+
+          return (
+            <div
+              key={obj.id}
+              style={{
+                position: 'absolute',
+                left: `${screenRect.x}px`,
+                top: `${screenRect.y}px`,
+                width: `${screenRect.width}px`,
+                height: `${screenRect.height}px`,
+                opacity: obj.opacity,
+                zIndex: obj.zIndex,
+                transform: obj.rotation ? `rotate(${obj.rotation}deg)` : undefined,
+              }}
+              onMouseDown={(e) => handleMouseDown(e, obj)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (obj.type === 'text') setEditingTextId(obj.id);
+              }}
+              className={`group transition-shadow ${
+                isSelected && !isEditingText ? 'ring-2 ring-indigo-500 shadow-sm' : ''
+              } ${obj.locked ? 'cursor-not-allowed' : 'cursor-move'}`}
+            >
+              {/* Text Object Rendering */}
+              {obj.type === 'text' && (
+                <div className="w-full h-full flex items-start">
+                  {isEditingText ? (
+                    <textarea
+                      autoFocus
+                      defaultValue={(obj as TextObject).text}
+                      onBlur={(e) => {
+                        const newTxt = e.target.value;
+                        if (newTxt !== (obj as TextObject).text) {
+                          onCommitTextEdit(obj.id, newTxt, (obj as TextObject).text);
+                        }
+                        setEditingTextId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setEditingTextId(null);
+                      }}
+                      style={{
+                        fontFamily: (obj as TextObject).fontName.includes('Times')
+                          ? 'Times New Roman, serif'
+                          : (obj as TextObject).fontName.includes('Courier')
+                          ? 'Courier New, monospace'
+                          : 'Helvetica, Arial, sans-serif',
+                        fontSize: `${(obj as TextObject).fontSize * zoom}px`,
+                        color: (obj as TextObject).fillColor,
+                        fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
+                        fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
+                        lineHeight: `${(obj as TextObject).lineHeight * zoom || (obj as TextObject).fontSize * 1.2 * zoom}px`,
+                      }}
+                      className="w-full h-full bg-white/95 text-slate-900 border border-indigo-500 rounded p-1 resize-none focus:outline-none shadow-lg z-50"
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        fontFamily: (obj as TextObject).fontName.includes('Times')
+                          ? 'Times New Roman, serif'
+                          : (obj as TextObject).fontName.includes('Courier')
+                          ? 'Courier New, monospace'
+                          : 'Helvetica, Arial, sans-serif',
+                        fontSize: `${(obj as TextObject).fontSize * zoom}px`,
+                        color: (obj as TextObject).fillColor,
+                        fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
+                        fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
+                        textDecoration: (obj as TextObject).underline ? 'underline' : 'none',
+                        letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
+                        lineHeight: `${((obj as TextObject).lineHeight || (obj as TextObject).fontSize * 1.2) * zoom}px`,
+                        textAlign: (obj as TextObject).alignment || 'left',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                      className="w-full h-full select-none"
+                    >
+                      {(obj as TextObject).text}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Image Object Rendering */}
+              {obj.type === 'image' && (
+                <img
+                  src={(obj as ImageObject).src}
+                  alt="PDF Image"
+                  className="w-full h-full object-fill pointer-events-none"
+                />
+              )}
+
+              {/* Shape Object Rendering */}
+              {obj.type === 'shape' && (
+                <svg className="w-full h-full overflow-visible pointer-events-none">
+                  {(obj as ShapeObject).shapeType === 'rect' && (
+                    <rect
+                      x={0}
+                      y={0}
+                      width={screenRect.width}
+                      height={screenRect.height}
+                      fill={(obj as ShapeObject).fillColor || 'transparent'}
+                      stroke={(obj as ShapeObject).strokeColor}
+                      strokeWidth={(obj as ShapeObject).strokeWidth * zoom}
+                    />
+                  )}
+                  {(obj as ShapeObject).shapeType === 'circle' && (
+                    <ellipse
+                      cx={screenRect.width / 2}
+                      cy={screenRect.height / 2}
+                      rx={screenRect.width / 2}
+                      ry={screenRect.height / 2}
+                      fill={(obj as ShapeObject).fillColor || 'transparent'}
+                      stroke={(obj as ShapeObject).strokeColor}
+                      strokeWidth={(obj as ShapeObject).strokeWidth * zoom}
+                    />
+                  )}
+                </svg>
+              )}
+
+              {/* Table Object Rendering */}
+              {obj.type === 'table' && (
+                <div className="w-full h-full overflow-hidden border border-slate-300 shadow-xs">
+                  <table className="w-full h-full border-collapse">
+                    <tbody>
+                      {(obj as TableObject).cells.map((rowCells, r) => (
+                        <tr key={`r_${r}`} style={{ height: `${(obj as TableObject).rowHeights[r] * zoom}px` }}>
+                          {rowCells.map((cell, c) => {
+                            const isEditingThisCell =
+                              editingCell?.tableId === obj.id && editingCell?.row === r && editingCell?.col === c;
+
+                            return (
+                              <td
+                                key={cell.id}
+                                style={{
+                                  width: `${(obj as TableObject).colWidths[c] * zoom}px`,
+                                  backgroundColor: cell.bgColor,
+                                  border: `${cell.borderWidth * zoom}px solid ${cell.borderColor}`,
+                                  color: cell.textColor,
+                                  fontSize: `${cell.fontSize * zoom}px`,
+                                  fontWeight: cell.bold ? 'bold' : 'normal',
+                                  fontStyle: cell.italic ? 'italic' : 'normal',
+                                  textAlign: cell.alignment,
+                                  padding: `${cell.padding * zoom}px`,
+                                }}
+                                onDoubleClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingCell({ tableId: obj.id, row: r, col: c });
+                                }}
+                                className="relative select-none hover:ring-1 hover:ring-indigo-400"
+                              >
+                                {isEditingThisCell ? (
+                                  <input
+                                    autoFocus
+                                    defaultValue={cell.text}
+                                    onBlur={(e) => {
+                                      onCommitTableCellEdit(obj.id, r, c, e.target.value);
+                                      setEditingCell(null);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === 'Escape') {
+                                        onCommitTableCellEdit(obj.id, r, c, (e.target as HTMLInputElement).value);
+                                        setEditingCell(null);
+                                      }
+                                    }}
+                                    className="w-full h-full bg-white text-slate-900 px-1 rounded focus:outline-none ring-2 ring-indigo-500"
+                                  />
+                                ) : (
+                                  cell.text
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Transform & Resize Handles (Visible when selected) */}
+              {isSelected && !isEditingText && (
+                <>
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'tl')}
+                    className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize shadow"
+                  />
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'tr')}
+                    className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize shadow"
+                  />
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'bl')}
+                    className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize shadow"
+                  />
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'br')}
+                    className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize shadow"
+                  />
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'mr')}
+                    className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-ew-resize shadow"
+                  />
+                  <div
+                    onMouseDown={(e) => handleMouseDown(e, obj, 'bc')}
+                    className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-ns-resize shadow"
+                  />
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
