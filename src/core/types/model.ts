@@ -48,6 +48,7 @@ export interface BaseEditableObject {
   opacity: number;
   visible: boolean;
   locked: boolean;
+  isModified?: boolean;
   
   // Reference back to source PDF if imported
   sourcePdfRef?: {

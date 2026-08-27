@@ -10,6 +10,8 @@ import {
   TextObject,
 } from '../core/types/model';
 import { CoordinateSystem } from '../core/coords/CoordinateSystem';
+import { OperatorTextLine } from '../core/pdf/PdfJsOperatorInspector';
+import { OriginalPdfPage } from './OriginalPdfPage';
 import { ToolMode } from './Toolbar';
 
 interface CanvasProps {
@@ -25,6 +27,9 @@ interface CanvasProps {
   onCommitTableCellEdit: (tableId: string, row: number, col: number, newText: string) => void;
   onInsertNewObject: (obj: EditableObject) => void;
   onSmartPush: (thresholdPdfY: number, deltaHeight: number, excludeId: string) => void;
+  operatorTextLines?: OperatorTextLine[];
+  onCommitOperatorText?: (line: OperatorTextLine, text: string) => void;
+  sourcePdf?: ArrayBuffer | null;
 }
 
 type ResizeHandle = 'tl' | 'tc' | 'tr' | 'ml' | 'mr' | 'bl' | 'bc' | 'br' | 'rot';
@@ -42,6 +47,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   onCommitTableCellEdit,
   onInsertNewObject,
   onSmartPush,
+  operatorTextLines = [],
+  onCommitOperatorText,
+  sourcePdf,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -97,6 +105,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         italic: false,
         underline: false,
         alignment: 'left',
+        isModified: true,
       };
       onInsertNewObject(newText);
       setEditingTextId(newText.id);
@@ -104,6 +113,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       const newShape: ShapeObject = {
         id: `shape_user_${Date.now()}`,
         type: 'shape',
+        shapeType: 'rect',
         origin: 'user_created',
         pageIndex: page.pageIndex,
         pdfBounds: { x: pdfPt.x, y: pdfPt.y - 60, width: 120, height: 60 },
@@ -113,10 +123,30 @@ export const Canvas: React.FC<CanvasProps> = ({
         opacity: 1,
         visible: true,
         locked: false,
-        shapeType: 'rect',
+        fillColor: '#ffffff',
         strokeColor: '#0071e3',
-        fillColor: '#e8f2ff',
         strokeWidth: 2,
+        isModified: true,
+      };
+      onInsertNewObject(newShape);
+    } else if (currentTool === 'shape_circle') {
+      const newShape: ShapeObject = {
+        id: `shape_user_${Date.now()}`,
+        type: 'shape',
+        shapeType: 'circle',
+        origin: 'user_created',
+        pageIndex: page.pageIndex,
+        pdfBounds: { x: pdfPt.x, y: pdfPt.y - 60, width: 60, height: 60 },
+        matrix: [1, 0, 0, 1, pdfPt.x, pdfPt.y - 60],
+        rotation: 0,
+        zIndex: page.objects.length + 1,
+        opacity: 1,
+        visible: true,
+        locked: false,
+        fillColor: '#ffffff',
+        strokeColor: '#0071e3',
+        strokeWidth: 2,
+        isModified: true,
       };
       onInsertNewObject(newShape);
     } else if (currentTool === 'smart_push') {
@@ -133,6 +163,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     e.stopPropagation();
 
     onSelectObject(obj.id);
+
+    // If in text tool, single-click enters inline edit mode immediately
+    if (currentTool === 'text' && obj.type === 'text') {
+      setEditingTextId(obj.id);
+      return;
+    }
 
     const screenBounds = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
     setActiveDrag({
@@ -173,6 +209,8 @@ export const Canvas: React.FC<CanvasProps> = ({
             newPdfX,
             newPdfY,
           ],
+          isModified: true,
+          origin: 'user_created',
         });
       } else if (activeDrag.type === 'resize' && activeDrag.handle) {
         let newW = activeDrag.initialBounds.width;
@@ -180,24 +218,40 @@ export const Canvas: React.FC<CanvasProps> = ({
         let newX = activeDrag.initialBounds.x;
         let newY = activeDrag.initialBounds.y;
 
-        const h = activeDrag.handle;
-        if (h.includes('r')) newW = Math.max(15, activeDrag.initialBounds.width + dxScreen);
-        if (h.includes('b')) {
-          newH = Math.max(15, activeDrag.initialBounds.height + dyScreen);
-          newY = activeDrag.initialBounds.y - (newH - activeDrag.initialBounds.height);
-        }
-        if (h.includes('l')) {
-          const deltaW = dxScreen;
-          newW = Math.max(15, activeDrag.initialBounds.width - deltaW);
-          newX = activeDrag.initialBounds.x + deltaW;
-        }
-        if (h.includes('t')) {
-          const deltaH = -dyScreen;
-          newH = Math.max(15, activeDrag.initialBounds.height + deltaH);
+        switch (activeDrag.handle) {
+          case 'tr':
+            newW = Math.max(10, activeDrag.initialBounds.width + dxScreen);
+            newH = Math.max(10, activeDrag.initialBounds.height - dyScreen);
+            break;
+          case 'br':
+            newW = Math.max(10, activeDrag.initialBounds.width + dxScreen);
+            newH = Math.max(10, activeDrag.initialBounds.height + dyScreen);
+            newY = activeDrag.initialBounds.y - dyScreen;
+            break;
+          case 'tl':
+            newW = Math.max(10, activeDrag.initialBounds.width - dxScreen);
+            newH = Math.max(10, activeDrag.initialBounds.height - dyScreen);
+            newX = activeDrag.initialBounds.x + dxScreen;
+            break;
+          case 'bl':
+            newW = Math.max(10, activeDrag.initialBounds.width - dxScreen);
+            newH = Math.max(10, activeDrag.initialBounds.height + dyScreen);
+            newX = activeDrag.initialBounds.x + dxScreen;
+            newY = activeDrag.initialBounds.y - dyScreen;
+            break;
+          case 'mr':
+            newW = Math.max(10, activeDrag.initialBounds.width + dxScreen);
+            break;
+          case 'bc':
+            newH = Math.max(10, activeDrag.initialBounds.height + dyScreen);
+            newY = activeDrag.initialBounds.y - dyScreen;
+            break;
         }
 
         onUpdateObject({
           pdfBounds: { x: newX, y: newY, width: newW, height: newH },
+          isModified: true,
+          origin: 'user_created',
         });
       }
     };
@@ -236,14 +290,19 @@ export const Canvas: React.FC<CanvasProps> = ({
           width: `${pageWidthPx}px`,
           height: `${pageHeightPx}px`,
         }}
-        className="relative bg-white shadow-[0_12px_40px_rgba(0,0,0,0.07)] border border-black/[0.08] rounded-xs transition-all cursor-default"
+        className="relative bg-white shadow-[0_12px_40px_rgba(0,0,0,0.07)] border border-black/[0.08] rounded-xs transition-all cursor-default overflow-hidden"
       >
-        {/* Render Editable Objects */}
+        {/* Pixel-Perfect Original PDF Drawing Instructions */}
+        {sourcePdf && <OriginalPdfPage source={sourcePdf} pageNumber={page.pageIndex + 1} zoom={zoom} />}
+
+        {/* Interactive WYSIWYG Editable Layer */}
         {page.objects.map((obj) => {
           if (!obj.visible) return null;
           const screenRect = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
           const isSelected = selectedObjectId === obj.id;
           const isEditingText = editingTextId === obj.id;
+          const isModified = obj.origin === 'user_created' || obj.isModified;
+          const shouldShowOpaque = !sourcePdf || isModified;
 
           return (
             <div
@@ -263,9 +322,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                 e.stopPropagation();
                 if (obj.type === 'text') setEditingTextId(obj.id);
               }}
-              className={`group transition-shadow ${
-                isSelected && !isEditingText ? 'ring-1.5 ring-[#0071e3]' : ''
-              } ${obj.locked ? 'cursor-not-allowed' : 'cursor-move'}`}
+              className={`group transition-all ${
+                isSelected && !isEditingText
+                  ? 'ring-1.5 ring-[#0071e3] bg-[#0071e3]/10 rounded shadow-xs'
+                  : 'hover:ring-1 hover:ring-[#0071e3]/40 hover:bg-[#0071e3]/5 rounded'
+              } ${obj.locked ? 'cursor-not-allowed' : obj.type === 'text' ? 'cursor-text' : 'cursor-move'}`}
             >
               {/* Text Object Rendering */}
               {obj.type === 'text' && (
@@ -293,7 +354,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                           ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
                           : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
-                        color: (obj as TextObject).fillColor,
+                        color: (obj as TextObject).fillColor || '#1d1d1f',
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         lineHeight: 1.15,
@@ -311,7 +372,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                           ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
                           : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
-                        color: (obj as TextObject).fillColor,
+                        // When unedited, keep transparent so the original PDF drawing instructions show with 100% fidelity!
+                        color: shouldShowOpaque ? ((obj as TextObject).fillColor || '#1d1d1f') : 'transparent',
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         textDecoration: (obj as TextObject).underline ? 'underline' : 'none',
@@ -321,6 +383,16 @@ export const Canvas: React.FC<CanvasProps> = ({
                         whiteSpace: 'pre-wrap',
                         display: 'flex',
                         alignItems: 'center',
+                        // If modified, use an opaque white background mask covering the old text on the background canvas
+                        backgroundColor: shouldShowOpaque && sourcePdf
+                          ? '#ffffff'
+                          : isSelected && sourcePdf
+                          ? 'rgba(0, 113, 227, 0.08)'
+                          : undefined,
+                        boxShadow: shouldShowOpaque && sourcePdf
+                          ? '0 0 0 2px #ffffff'
+                          : undefined,
+                        borderRadius: isSelected ? '2px' : undefined,
                       }}
                       className="w-full h-full select-none"
                     >
@@ -330,8 +402,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
 
-              {/* Image Object Rendering */}
-              {obj.type === 'image' && (
+              {/* Image Object Rendering (Only render if user-created or no sourcePdf) */}
+              {obj.type === 'image' && (!sourcePdf || obj.origin === 'user_created') && (
                 <img
                   src={(obj as ImageObject).src}
                   alt="PDF Image"
@@ -339,8 +411,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 />
               )}
 
-              {/* Shape Object Rendering */}
-              {obj.type === 'shape' && (
+              {/* Shape Object Rendering (Only render if user-created or no sourcePdf) */}
+              {obj.type === 'shape' && (!sourcePdf || obj.origin === 'user_created') && (
                 <svg className="w-full h-full overflow-visible pointer-events-none">
                   {(obj as ShapeObject).shapeType === 'rect' && (
                     <rect
@@ -360,6 +432,16 @@ export const Canvas: React.FC<CanvasProps> = ({
                       rx={screenRect.width / 2}
                       ry={screenRect.height / 2}
                       fill={(obj as ShapeObject).fillColor || 'transparent'}
+                      stroke={(obj as ShapeObject).strokeColor}
+                      strokeWidth={(obj as ShapeObject).strokeWidth * zoom}
+                    />
+                  )}
+                  {(obj as ShapeObject).shapeType === 'line' && (
+                    <line
+                      x1={0}
+                      y1={0}
+                      x2={screenRect.width}
+                      y2={screenRect.height}
                       stroke={(obj as ShapeObject).strokeColor}
                       strokeWidth={(obj as ShapeObject).strokeWidth * zoom}
                     />

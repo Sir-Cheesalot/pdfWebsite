@@ -1,5 +1,5 @@
 // Main Application Component for True WYSIWYG PDF Editor (Apple White Edition)
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DocumentModel,
   EditableObject,
@@ -22,7 +22,6 @@ import {
   UpdateTableCommand,
 } from './core/history/CommandManager';
 import { DocumentModelManager } from './core/model/DocumentModel';
-import { SamplePdfs } from './core/samples/SamplePdfs';
 import { PdfWriter } from './core/exporter/PdfWriter';
 import { Toolbar, ToolMode } from './components/Toolbar';
 import { PageNavigation } from './components/PageNavigation';
@@ -32,9 +31,10 @@ import { TableModal } from './components/TableModal';
 import { FullPageOcrReconciler } from './core/ocr/FullPageOcrReconciler';
 import { OcrVerificationEngine } from './core/ocr/OcrVerificationEngine';
 import { Loader2, Upload } from 'lucide-react';
+import { inspectPdfOperatorText, OperatorTextLine } from './core/pdf/PdfJsOperatorInspector';
 
 export const App: React.FC = () => {
-  const [doc, setDoc] = useState<DocumentModel>(() => SamplePdfs.createInvoiceSample());
+  const [doc, setDoc] = useState<DocumentModel>(() => DocumentModelManager.createBlankDocument('Untitled Document.pdf'));
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>('select');
@@ -44,6 +44,9 @@ export const App: React.FC = () => {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isOcrRunning, setIsOcrRunning] = useState(false);
   const [ocrProgressMsg, setOcrProgressMsg] = useState('');
+  const [operatorTextLines, setOperatorTextLines] = useState<OperatorTextLine[]>([]);
+  const [currentSourcePdf, setCurrentSourcePdf] = useState<ArrayBuffer | null>(null);
+  const pdfSourceRef = useRef<ArrayBuffer | null>(null);
 
   const [historyState, setHistoryState] = useState<HistoryState>({
     canUndo: false,
@@ -58,6 +61,20 @@ export const App: React.FC = () => {
 
   const activePage = doc.pages[activePageIndex] || doc.pages[0];
   const selectedObject = activePage?.objects.find((o) => o.id === selectedObjectId) || null;
+
+  useEffect(() => {
+    if (!pdfSourceRef.current) return;
+    let cancelled = false;
+    inspectPdfOperatorText(pdfSourceRef.current, activePageIndex + 1)
+      .then((lines) => {
+        if (!cancelled) setOperatorTextLines(lines);
+      })
+      .catch((error) => {
+        console.warn('PDF operator inspection unavailable:', error);
+        if (!cancelled) setOperatorTextLines([]);
+      });
+    return () => { cancelled = true; };
+  }, [activePageIndex, doc.id]);
 
   // --- Global Drag and Drop File Upload ---
   useEffect(() => {
@@ -77,9 +94,10 @@ export const App: React.FC = () => {
     const handleDrop = async (e: DragEvent) => {
       e.preventDefault();
       setIsDraggingFile(false);
-      if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
-        const file = e.dataTransfer.files[0];
-        if (file.name.toLowerCase().endsWith('.pdf')) {
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
           await handleOpenPdf(file);
         }
       }
@@ -88,6 +106,7 @@ export const App: React.FC = () => {
     window.addEventListener('dragover', handleDragOver);
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('drop', handleDrop);
+
     return () => {
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('dragleave', handleDragLeave);
@@ -98,39 +117,41 @@ export const App: React.FC = () => {
   // --- Keyboard Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+      if (
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA'
+      ) {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
           handleRedo();
         } else {
           handleUndo();
         }
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
-        e.preventDefault();
-        handleRedo();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedObjectId) {
           e.preventDefault();
           handleDeleteObject(selectedObjectId);
         }
-      } else if (e.key === 'Escape') {
-        setSelectedObjectId(null);
+      } else if (e.key.toLowerCase() === 'v') {
         setCurrentTool('select');
-      } else if (e.key === 'v' || e.key === 'V') {
-        setCurrentTool('select');
-      } else if (e.key === 't' || e.key === 'T') {
+      } else if (e.key.toLowerCase() === 't') {
         setCurrentTool('text');
+      } else if (e.key.toLowerCase() === 'r') {
+        setCurrentTool('shape_rect');
+      } else if (e.key.toLowerCase() === 'c') {
+        setCurrentTool('shape_circle');
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [doc, activePageIndex, selectedObjectId]);
+  }, [selectedObjectId, doc]);
 
+  // --- Actions ---
   const handleUndo = () => {
     const newDoc = commandManager.undo(doc);
     setDoc(newDoc);
@@ -218,20 +239,30 @@ export const App: React.FC = () => {
     const idx = objs.findIndex((o) => o.id === id);
     if (idx === -1) return;
 
-    const [target] = objs.splice(idx, 1);
-    if (direction === 'front') objs.push(target);
-    else if (direction === 'back') objs.unshift(target);
-    else if (direction === 'up') objs.splice(Math.min(objs.length, idx + 1), 0, target);
-    else if (direction === 'down') objs.splice(Math.max(0, idx - 1), 0, target);
+    const item = objs[idx];
+    objs.splice(idx, 1);
 
-    setDoc({
-      ...doc,
-      pages: doc.pages.map((p, pIdx) => (pIdx === activePageIndex ? { ...p, objects: objs } : p)),
+    if (direction === 'front') {
+      objs.push(item);
+    } else if (direction === 'back') {
+      objs.unshift(item);
+    } else if (direction === 'up') {
+      objs.splice(Math.min(objs.length, idx + 1), 0, item);
+    } else if (direction === 'down') {
+      objs.splice(Math.max(0, idx - 1), 0, item);
+    }
+
+    objs.forEach((o, i) => {
+      o.zIndex = i + 1;
     });
+
+    const updatedPages = [...doc.pages];
+    updatedPages[activePageIndex] = { ...activePage, objects: objs };
+    setDoc({ ...doc, pages: updatedPages, isDirty: true });
   };
 
   const handleAddPage = () => {
-    const newPage = DocumentModelManager.createBlankPage(doc.pages.length);
+    const newPage = DocumentModelManager.createBlankPage(doc.pages.length, 612, 792);
     setDoc({
       ...doc,
       pages: [...doc.pages, newPage],
@@ -268,6 +299,8 @@ export const App: React.FC = () => {
     try {
       const buffer = await file.arrayBuffer();
       const { doc: loadedDoc } = await DocumentModelManager.loadPdfFromBuffer(buffer, file.name);
+      pdfSourceRef.current = buffer;
+      setCurrentSourcePdf(buffer);
       setDoc(loadedDoc);
       setActivePageIndex(0);
       setSelectedObjectId(null);
@@ -304,23 +337,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleLoadSample = (sampleType: 'invoice' | 'academic') => {
-    const sampleDoc =
-      sampleType === 'invoice' ? SamplePdfs.createInvoiceSample() : SamplePdfs.createAcademicSample();
-    setDoc(sampleDoc);
-    setActivePageIndex(0);
-    setSelectedObjectId(null);
-    commandManager.clear();
-  };
-
-  const handleNewDocument = () => {
-    const newDoc = DocumentModelManager.createBlankDocument('Untitled Document.pdf', 1);
-    setDoc(newDoc);
-    setActivePageIndex(0);
-    setSelectedObjectId(null);
-    commandManager.clear();
-  };
-
   const handleInsertImageFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -349,6 +365,7 @@ export const App: React.FC = () => {
           naturalWidth: img.width,
           naturalHeight: img.height,
           mimeType: file.type || 'image/png',
+          isModified: true,
         };
         handleInsertNewObject(newImageObj);
       };
@@ -403,6 +420,16 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleNewDocument = () => {
+    const newDoc = DocumentModelManager.createBlankDocument('Untitled Document.pdf', 1);
+    pdfSourceRef.current = null;
+    setCurrentSourcePdf(null);
+    setDoc(newDoc);
+    setActivePageIndex(0);
+    setSelectedObjectId(null);
+    commandManager.clear();
+  };
+
   return (
     <div className="w-screen h-screen flex flex-col bg-[#f5f5f7] text-[#1d1d1f] overflow-hidden font-sans">
       {/* Top Toolbar */}
@@ -415,7 +442,6 @@ export const App: React.FC = () => {
         onRedo={handleRedo}
         onExportPdf={handleExportPdf}
         onOpenPdf={handleOpenPdf}
-        onLoadSample={handleLoadSample}
         onNewDocument={handleNewDocument}
         zoom={zoom}
         onZoomChange={setZoom}
@@ -465,6 +491,15 @@ export const App: React.FC = () => {
           onCommitTableCellEdit={handleCommitTableCellEdit}
           onInsertNewObject={handleInsertNewObject}
           onSmartPush={handleSmartPush}
+          sourcePdf={currentSourcePdf}
+          operatorTextLines={operatorTextLines}
+          onCommitOperatorText={(line, text) => {
+            setOperatorTextLines((currentLines) =>
+              currentLines.map((currentLine) =>
+                currentLine.id === line.id ? { ...currentLine, text } : currentLine,
+              ),
+            );
+          }}
         />
 
         {/* Right Properties Inspector & Layer Tree */}
@@ -479,30 +514,20 @@ export const App: React.FC = () => {
         />
       </div>
 
-      {/* Table Creator Modal */}
+      {/* Insert Table Modal Dialog */}
       <TableModal
         isOpen={isTableModalOpen}
         onClose={() => setIsTableModalOpen(false)}
-        onCreateTable={handleInsertNewObject}
+        onCreateTable={(table) => handleInsertNewObject(table)}
         pageIndex={activePageIndex}
       />
 
-      {/* Loading Overlay */}
-      {isLoading && (
-        <div className="fixed inset-0 bg-white/70 backdrop-blur-xs z-50 flex items-center justify-center space-x-2 text-[#1d1d1f]">
-          <Loader2 className="w-5 h-5 animate-spin text-[#0071e3]" />
-          <span className="text-xs font-semibold">Parsing PDF structure...</span>
-        </div>
-      )}
-
-      {/* Drag and Drop Full Screen Overlay */}
+      {/* Drag and Drop Fullscreen Overlay */}
       {isDraggingFile && (
-        <div className="fixed inset-0 bg-[#0071e3]/10 backdrop-blur-xs z-50 flex items-center justify-center p-8 pointer-events-none">
-          <div className="bg-white/95 rounded-2xl border-2 border-dashed border-[#0071e3] p-10 flex flex-col items-center space-y-3 shadow-2xl">
-            <Upload className="w-10 h-10 text-[#0071e3] animate-bounce" />
-            <h3 className="text-sm font-semibold text-[#1d1d1f]">Drop PDF to Open</h3>
-            <p className="text-xs text-[#86868b]">Release file anywhere to edit</p>
-          </div>
+        <div className="fixed inset-0 bg-[#0071e3]/10 backdrop-blur-xs border-4 border-dashed border-[#0071e3] z-50 flex flex-col items-center justify-center pointer-events-none">
+          <Upload className="w-16 h-16 text-[#0071e3] animate-bounce mb-4" />
+          <p className="text-xl font-semibold text-[#1d1d1f]">Drop PDF file anywhere to open</p>
+          <p className="text-sm text-[#6e6e73]">Release to parse and start editing</p>
         </div>
       )}
     </div>

@@ -32,14 +32,13 @@ interface ToolbarProps {
   onRedo: () => void;
   onExportPdf: () => void;
   onOpenPdf: (file: File) => void;
-  onLoadSample: (sampleType: 'invoice' | 'academic') => void;
-  onNewDocument: () => void;
   zoom: number;
   onZoomChange: (newZoom: number) => void;
   currentPageIndex: number;
   onPageChange: (index: number) => void;
   onInsertImageFile: (file: File) => void;
   onOpenTableModal: () => void;
+  onNewDocument?: () => void;
   isLoading?: boolean;
   onRunFullPageOcr?: () => void;
   isOcrRunning?: boolean;
@@ -54,8 +53,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onRedo,
   onExportPdf,
   onOpenPdf,
-  onLoadSample,
-  onNewDocument,
   zoom,
   onZoomChange,
   currentPageIndex,
@@ -122,25 +119,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Upload className="w-3.5 h-3.5 text-[#0071e3]" />
           <span>Upload PDF</span>
         </button>
-
-        {/* Sample selector */}
-        <select
-          onChange={(e) => {
-            if (e.target.value === 'invoice') onLoadSample('invoice');
-            if (e.target.value === 'academic') onLoadSample('academic');
-            if (e.target.value === 'new') onNewDocument();
-            e.target.value = '';
-          }}
-          defaultValue=""
-          className="bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#424245] text-xs rounded-lg px-2.5 py-1.5 border border-black/[0.04] focus:outline-none focus:ring-1 focus:ring-[#0071e3] transition-colors cursor-pointer"
-        >
-          <option value="" disabled>
-            Samples
-          </option>
-          <option value="invoice">Invoice with Table</option>
-          <option value="academic">Academic Report</option>
-          <option value="new">Blank Document</option>
-        </select>
 
         {/* Undo / Redo */}
         <div className="flex items-center space-x-0.5 pl-1.5 border-l border-black/[0.08]">
