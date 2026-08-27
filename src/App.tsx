@@ -166,6 +166,23 @@ export const App: React.FC = () => {
     const cmd = new EditTextCommand(activePageIndex, objectId, newText, oldText);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+
+    // Surgically update the underlying PDF.js drawing instruction
+    const targetObj = activePage?.objects.find((o) => o.id === objectId);
+    if (targetObj && targetObj.type === 'text') {
+      const targetText = targetObj as TextObject;
+      const matchingLine = operatorTextLines.find((line) => {
+        const baselineY = targetText.pdfBounds.y + 0.22 * targetText.fontSize;
+        return (
+          Math.abs(line.y - baselineY) < 3.5 ||
+          (oldText.length > 3 && line.text.includes(oldText.slice(0, 8)))
+        );
+      });
+      if (matchingLine) {
+        matchingLine.applyEdit(newText);
+        setOperatorTextLines([...operatorTextLines]);
+      }
+    }
   };
 
   const handleCommitObjectMove = (objectId: string, dxPdf: number, dyPdf: number) => {
