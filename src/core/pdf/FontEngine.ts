@@ -277,14 +277,15 @@ export class FontEngine {
           char = cmap.get(byte)!;
         } else if (isSymbolFont && SYMBOL_FONT_MAP[byte]) {
           char = SYMBOL_FONT_MAP[byte];
-        } else if (byte >= 32 && byte <= 126) {
-          // Printable ASCII
-          char = String.fromCharCode(byte);
         } else if (WIN_ANSI_MAP[byte]) {
           // WinAnsi (±, °, ×, µ, etc.)
           char = WIN_ANSI_MAP[byte];
-        } else {
+        } else if (byte >= 32 && byte <= 126) {
+          // Printable ASCII
           char = String.fromCharCode(byte);
+        } else {
+          // Non-printable control byte
+          char = ' ';
         }
 
         text += char;
