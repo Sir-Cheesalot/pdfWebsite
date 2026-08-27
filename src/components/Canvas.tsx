@@ -286,15 +286,17 @@ export const Canvas: React.FC<CanvasProps> = ({
                       }}
                       style={{
                         fontFamily: (obj as TextObject).fontName.includes('Times')
-                          ? 'Times New Roman, serif'
+                          ? '"Times New Roman", Times, serif'
                           : (obj as TextObject).fontName.includes('Courier')
-                          ? 'Courier New, monospace'
+                          ? '"Courier New", Courier, monospace'
+                          : (obj as TextObject).fontName.toLowerCase().includes('symbol') || (obj as TextObject).fontName.toLowerCase().includes('math')
+                          ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
                           : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         color: (obj as TextObject).fillColor,
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
-                        lineHeight: `${(obj as TextObject).lineHeight * zoom || (obj as TextObject).fontSize * 1.2 * zoom}px`,
+                        lineHeight: 1.15,
                       }}
                       className="w-full h-full bg-white text-[#1d1d1f] border border-[#0071e3] rounded p-1 resize-none focus:outline-none shadow-md z-50 ring-2 ring-[#0071e3]/20"
                     />
@@ -302,9 +304,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                     <div
                       style={{
                         fontFamily: (obj as TextObject).fontName.includes('Times')
-                          ? 'Times New Roman, serif'
+                          ? '"Times New Roman", Times, serif'
                           : (obj as TextObject).fontName.includes('Courier')
-                          ? 'Courier New, monospace'
+                          ? '"Courier New", Courier, monospace'
+                          : (obj as TextObject).fontName.toLowerCase().includes('symbol') || (obj as TextObject).fontName.toLowerCase().includes('math')
+                          ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
                           : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         color: (obj as TextObject).fillColor,
@@ -312,9 +316,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         textDecoration: (obj as TextObject).underline ? 'underline' : 'none',
                         letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
-                        lineHeight: `${((obj as TextObject).lineHeight || (obj as TextObject).fontSize * 1.2) * zoom}px`,
+                        lineHeight: 1.15,
                         textAlign: (obj as TextObject).alignment || 'left',
                         whiteSpace: 'pre-wrap',
+                        display: 'flex',
+                        alignItems: 'center',
                       }}
                       className="w-full h-full select-none"
                     >

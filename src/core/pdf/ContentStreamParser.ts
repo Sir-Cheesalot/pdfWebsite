@@ -196,11 +196,13 @@ export class ContentStreamParser {
           maxY = Math.max(maxY, run.y + run.height);
         }
         if (minX !== Infinity) {
+          const descent = 0.22 * activeTextObj.fontSize;
+          const bboxH = Math.max(activeTextObj.fontSize * 1.15, maxY - minY + activeTextObj.fontSize * 1.15);
           activeTextObj.pdfBounds = {
             x: minX,
-            y: minY,
-            width: Math.max(10, maxX - minX),
-            height: Math.max(activeTextObj.fontSize, maxY - minY),
+            y: minY - descent,
+            width: Math.max(8, maxX - minX),
+            height: bboxH,
           };
         }
         objects.push(activeTextObj);
@@ -298,29 +300,29 @@ export class ContentStreamParser {
           flushActiveText();
           const tx = Number(args[0]);
           const ty = Number(args[1]);
-          const transMatrix: Matrix2D = [1, 0, 0, 1, tx, ty];
-          textLineMatrix = CoordinateSystem.multiply(transMatrix, textLineMatrix);
+          textLineMatrix[4] += tx * textLineMatrix[0] + ty * textLineMatrix[2];
+          textLineMatrix[5] += tx * textLineMatrix[1] + ty * textLineMatrix[3];
           textMatrix = [...textLineMatrix];
         } else if (op === 'TD' && args.length === 2) {
           flushActiveText();
           const tx = Number(args[0]);
           const ty = Number(args[1]);
           currentLeading = -ty;
-          const transMatrix: Matrix2D = [1, 0, 0, 1, tx, ty];
-          textLineMatrix = CoordinateSystem.multiply(transMatrix, textLineMatrix);
+          textLineMatrix[4] += tx * textLineMatrix[0] + ty * textLineMatrix[2];
+          textLineMatrix[5] += tx * textLineMatrix[1] + ty * textLineMatrix[3];
           textMatrix = [...textLineMatrix];
         } else if (op === 'T*') {
           flushActiveText();
-          const transMatrix: Matrix2D = [1, 0, 0, 1, 0, -currentLeading];
-          textLineMatrix = CoordinateSystem.multiply(transMatrix, textLineMatrix);
+          textLineMatrix[4] += -currentLeading * textLineMatrix[2];
+          textLineMatrix[5] += -currentLeading * textLineMatrix[3];
           textMatrix = [...textLineMatrix];
         }
 
         // --- Text Showing Operators ---
         else if ((op === 'Tj' || op === "'" || op === '"') && args.length >= 1) {
           if (op === "'" || op === '"') {
-            const transMatrix: Matrix2D = [1, 0, 0, 1, 0, -currentLeading];
-            textLineMatrix = CoordinateSystem.multiply(transMatrix, textLineMatrix);
+            textLineMatrix[4] += -currentLeading * textLineMatrix[2];
+            textLineMatrix[5] += -currentLeading * textLineMatrix[3];
             textMatrix = [...textLineMatrix];
           }
 
@@ -334,7 +336,6 @@ export class ContentStreamParser {
             const { text, widths } = this.fontEngine.decodeString(strArg.bytes, fontDesc);
             
             // Calculate effective position in PDF coordinates
-            // effective matrix = textMatrix x ctm
             const effectiveMatrix = CoordinateSystem.multiply(textMatrix, state.ctm);
             const posX = effectiveMatrix[4];
             const posY = effectiveMatrix[5];
@@ -344,13 +345,15 @@ export class ContentStreamParser {
               textWidth += (widths[i] / 1000) * currentFontSize + charSpacing;
             }
 
+            const descent = 0.22 * currentFontSize;
+            const bboxH = currentFontSize * 1.15;
             const run: TextRun = {
               text,
               pdfBytes: strArg.bytes,
               x: posX,
               y: posY,
               width: textWidth,
-              height: currentFontSize,
+              height: bboxH,
               fontSize: currentFontSize,
               fontName: fontDesc?.name || 'Helvetica',
               charSpacing,
@@ -363,7 +366,7 @@ export class ContentStreamParser {
                 type: 'text',
                 origin: 'pdf_source',
                 pageIndex,
-                pdfBounds: { x: posX, y: posY, width: textWidth, height: currentFontSize },
+                pdfBounds: { x: posX, y: posY - descent, width: textWidth, height: bboxH },
                 matrix: [...effectiveMatrix],
                 rotation: 0,
                 zIndex: objects.length + 1,
@@ -436,7 +439,6 @@ export class ContentStreamParser {
                 });
                 currentX += segmentWidth;
               } else if (typeof item === 'number') {
-                // Kerning / spacing adjustment in 1/1000 em
                 const adj = (-item / 1000) * currentFontSize;
                 currentX += adj;
                 if (item < -150) {
@@ -445,13 +447,15 @@ export class ContentStreamParser {
               }
             }
 
-            const totalWidth = Math.max(10, currentX - startX);
+            const totalWidth = Math.max(8, currentX - startX);
+            const descent = 0.22 * currentFontSize;
+            const bboxH = currentFontSize * 1.15;
             const textObj: TextObject = {
               id: `txt_${pageIndex}_${objectCounter++}`,
               type: 'text',
               origin: 'pdf_source',
               pageIndex,
-              pdfBounds: { x: startX, y: startY, width: totalWidth, height: currentFontSize },
+              pdfBounds: { x: startX, y: startY - descent, width: totalWidth, height: bboxH },
               matrix: [...effectiveMatrix],
               rotation: 0,
               zIndex: objects.length + 1,

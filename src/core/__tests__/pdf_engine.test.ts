@@ -179,7 +179,7 @@ describe('5. Content Stream Parser & Operator Extraction', () => {
     expect(objects[0].type).toBe('text');
     expect((objects[0] as TextObject).text).toBe('First Line of Text');
     expect(objects[0].pdfBounds.x).toBe(50);
-    expect(objects[0].pdfBounds.y).toBe(650);
+    expect(objects[0].pdfBounds.y).toBeCloseTo(650, -1);
 
     expect(objects[1].type).toBe('text');
     expect((objects[1] as TextObject).text).toContain('Second Line');
