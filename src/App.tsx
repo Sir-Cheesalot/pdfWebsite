@@ -30,6 +30,7 @@ import { Canvas } from './components/Canvas';
 import { Inspector } from './components/Inspector';
 import { TableModal } from './components/TableModal';
 import { FullPageOcrReconciler } from './core/ocr/FullPageOcrReconciler';
+import { OcrVerificationEngine } from './core/ocr/OcrVerificationEngine';
 import { Loader2, Upload } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -271,6 +272,30 @@ export const App: React.FC = () => {
       setActivePageIndex(0);
       setSelectedObjectId(null);
       commandManager.clear();
+
+      // Auto-run OCR reconciliation if page contains corrupted or exotic characters
+      const firstPage = loadedDoc.pages[0];
+      const hasExotic = firstPage?.objects.some(
+        (o) => o.type === 'text' && OcrVerificationEngine.containsExoticChars((o as TextObject).text)
+      );
+
+      if (firstPage && hasExotic) {
+        setIsOcrRunning(true);
+        setOcrProgressMsg('Auto-fixing corrupted equation & font symbols with OCR...');
+        FullPageOcrReconciler.reconcilePage(firstPage, (msg) => setOcrProgressMsg(msg))
+          .then(({ updatedPage }) => {
+            setDoc((currentDoc) => {
+              const updatedPages = [...currentDoc.pages];
+              updatedPages[0] = updatedPage;
+              return { ...currentDoc, pages: updatedPages };
+            });
+          })
+          .catch((e) => console.warn('Auto-OCR background check warning:', e))
+          .finally(() => {
+            setIsOcrRunning(false);
+            setOcrProgressMsg('');
+          });
+      }
     } catch (err) {
       console.error('Failed to open PDF:', err);
       alert('Could not parse PDF file. Ensure it is a valid PDF document.');

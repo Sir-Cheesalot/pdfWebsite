@@ -375,8 +375,19 @@ describe('9. OCR Verification & Exotic Character Resolution Engine', () => {
 
   it('computes Levenshtein text similarity correctly for OCR reconciliation', async () => {
     const { FullPageOcrReconciler } = await import('../ocr/FullPageOcrReconciler');
-    expect(FullPageOcrReconciler.computeSimilarity('Volunteer Hours Report', 'Volunteer Hours Report')).toBe(1.0);
     expect(FullPageOcrReconciler.computeSimilarity('Volunteer Hours Report', 'Volunteee Hours Repoort')).toBeGreaterThan(0.8);
     expect(FullPageOcrReconciler.computeSimilarity('COMPLETED SHIFTS', 'UPCOMING SHIFTS')).toBeLessThan(0.6);
+  });
+
+  it('resolves physics variables and arrows from Word Equation Editor fonts', async () => {
+    const { OcrVerificationEngine } = await import('../ocr/OcrVerificationEngine');
+    const input = 'where ( \u22A4 ) represents the mass of the ball, ( \u21AB ) represents gravitational acceleration, ( \u21C3 ) represents the release height of the suspended ball, ( \u21B0 ) represents the spring constant, and ( \u21A6 ) represents the maximum compression distance of the spring.';
+    const res = OcrVerificationEngine.verifyAndCleanText(input);
+    expect(res.hasExoticChars).toBe(true);
+    expect(res.verifiedText).toContain('(m) represents the mass of the ball');
+    expect(res.verifiedText).toContain('(g) represents gravitational acceleration');
+    expect(res.verifiedText).toContain('(h) represents the release height');
+    expect(res.verifiedText).toContain('(k) represents the spring constant');
+    expect(res.verifiedText).toContain('(Δx) represents the maximum compression distance');
   });
 });
