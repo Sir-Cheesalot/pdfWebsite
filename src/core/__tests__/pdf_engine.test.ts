@@ -368,9 +368,15 @@ describe('9. OCR Verification & Exotic Character Resolution Engine', () => {
     for (const str of strings) {
       const contains = OcrVerificationEngine.containsExoticChars(str);
       const res = OcrVerificationEngine.verifyAndCleanText(str);
-      console.log(`Original: "${str}" -> ContainsExotic: ${contains}, Result: "${res.verifiedText}"`);
       expect(contains).toBe(false);
       expect(res.verifiedText).toBe(str);
     }
+  });
+
+  it('computes Levenshtein text similarity correctly for OCR reconciliation', async () => {
+    const { FullPageOcrReconciler } = await import('../ocr/FullPageOcrReconciler');
+    expect(FullPageOcrReconciler.computeSimilarity('Volunteer Hours Report', 'Volunteer Hours Report')).toBe(1.0);
+    expect(FullPageOcrReconciler.computeSimilarity('Volunteer Hours Report', 'Volunteee Hours Repoort')).toBeGreaterThan(0.8);
+    expect(FullPageOcrReconciler.computeSimilarity('COMPLETED SHIFTS', 'UPCOMING SHIFTS')).toBeLessThan(0.6);
   });
 });

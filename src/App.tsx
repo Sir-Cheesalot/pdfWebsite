@@ -29,6 +29,7 @@ import { PageNavigation } from './components/PageNavigation';
 import { Canvas } from './components/Canvas';
 import { Inspector } from './components/Inspector';
 import { TableModal } from './components/TableModal';
+import { FullPageOcrReconciler } from './core/ocr/FullPageOcrReconciler';
 import { Loader2, Upload } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -40,6 +41,8 @@ export const App: React.FC = () => {
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [isOcrRunning, setIsOcrRunning] = useState(false);
+  const [ocrProgressMsg, setOcrProgressMsg] = useState('');
 
   const [historyState, setHistoryState] = useState<HistoryState>({
     canUndo: false,
@@ -349,6 +352,32 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleRunFullPageOcr = async () => {
+    if (!activePage || isOcrRunning) return;
+    setIsOcrRunning(true);
+    setOcrProgressMsg('Initializing Tesseract OCR...');
+    try {
+      const { updatedPage, stats } = await FullPageOcrReconciler.reconcilePage(
+        activePage,
+        (msg) => setOcrProgressMsg(msg)
+      );
+      const updatedPages = [...doc.pages];
+      updatedPages[activePageIndex] = updatedPage;
+      setDoc({ ...doc, pages: updatedPages });
+      if (stats.replacedCount > 0) {
+        alert(`OCR Scan Complete! Fixed and replaced ${stats.replacedCount} mismatched/corrupted text blocks with high-confidence OCR text.`);
+      } else {
+        alert('OCR Scan Complete! All text objects accurately match OCR recognition.');
+      }
+    } catch (err) {
+      console.error('OCR Reconciliation Error:', err);
+      alert('OCR Reconciliation encountered an issue: ' + err);
+    } finally {
+      setIsOcrRunning(false);
+      setOcrProgressMsg('');
+    }
+  };
+
   return (
     <div className="w-screen h-screen flex flex-col bg-[#f5f5f7] text-[#1d1d1f] overflow-hidden font-sans">
       {/* Top Toolbar */}
@@ -370,7 +399,17 @@ export const App: React.FC = () => {
         onInsertImageFile={handleInsertImageFile}
         onOpenTableModal={() => setIsTableModalOpen(true)}
         isLoading={isLoading}
+        onRunFullPageOcr={handleRunFullPageOcr}
+        isOcrRunning={isOcrRunning}
       />
+
+      {/* OCR Progress Toast */}
+      {isOcrRunning && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-white/95 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-[#0071e3]/30 flex items-center space-x-2 text-xs font-medium text-[#1d1d1f]">
+          <Loader2 className="w-4 h-4 animate-spin text-[#0071e3]" />
+          <span>{ocrProgressMsg || 'Scanning with Tesseract OCR...'}</span>
+        </div>
+      )}
 
       {/* Main Workspace Area */}
       <div className="flex-1 flex overflow-hidden relative">
