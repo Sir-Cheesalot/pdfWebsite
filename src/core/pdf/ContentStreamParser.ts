@@ -50,10 +50,12 @@ export class ContentStreamParser {
     const lexer = new PdfLexer(data);
     const ops: ContentOperator[] = [];
     const argsStack: PdfObject[] = [];
+    let opStartByte: number | null = null;
 
     while (true) {
       lexer.skipWhitespaceAndComments();
       const pos = lexer.position;
+      if (opStartByte === null) opStartByte = pos;
       const tok = lexer.nextToken();
       if (!tok) break;
 
@@ -63,8 +65,11 @@ export class ContentStreamParser {
           op: opName,
           args: [...argsStack],
           rawIndex: pos,
+          startByte: opStartByte,
+          endByte: lexer.position,
         });
         argsStack.length = 0; // clear args
+        opStartByte = null;
       } else if (tok.type === 'name') {
         argsStack.push(new PdfName(tok.value));
       } else if (tok.type === 'string') {
@@ -417,9 +422,11 @@ export class ContentStreamParser {
               };
             }
 
-            activeTextObj.text += text;
-            activeTextObj.runs.push(run);
-            activeTextObj.sourcePdfRef!.endOpIndex = opIdx;
+            if (activeTextObj) {
+              activeTextObj.text += text;
+              activeTextObj.runs.push(run);
+              activeTextObj.sourcePdfRef!.endOpIndex = opIdx;
+            }
 
             // Advance text matrix
             const advanceMatrix: Matrix2D = [1, 0, 0, 1, textWidth, 0];

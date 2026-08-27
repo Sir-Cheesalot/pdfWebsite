@@ -132,4 +132,9 @@ export interface ContentOperator {
   op: string;
   args: PdfObject[];
   rawIndex?: number;
+  // Exact byte offsets in the source content stream this operator (including
+  // its operands) spans. Used to losslessly pass through unmodified content
+  // instead of re-serializing it through a lossy string round-trip.
+  startByte?: number;
+  endByte?: number;
 }

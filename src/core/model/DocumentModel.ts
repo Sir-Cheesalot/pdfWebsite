@@ -51,6 +51,10 @@ export class DocumentModelManager {
 
       // Interpret content stream into editable objects
       const { page } = streamParser.interpretPage(pageIdx, pageDict, streamDataList);
+      // Retain the original bytes and page dict so export can pass through
+      // anything unmodified instead of regenerating it from the object model.
+      page.sourceStreams = streamDataList;
+      page.sourcePageDict = pageDict;
       pages.push(page);
     }
 
@@ -67,7 +71,7 @@ export class DocumentModelManager {
       fonts,
       isDirty: false,
       activePageIndex: 0,
-      originalPdfBytes: uint8,
+      sourcePdf: { objects: parsedPdf.objects, trailer: parsedPdf.trailer },
     };
 
     return { doc, parser };

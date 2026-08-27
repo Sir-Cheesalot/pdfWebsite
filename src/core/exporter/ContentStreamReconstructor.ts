@@ -31,102 +31,150 @@ export class ContentStreamReconstructor {
   }
 
   /**
-   * Reconstruct and serialize the content stream for a given page,
-   * modifying existing PDF operations in-place and appending new genuine PDF primitives.
+   * Reconstruct and serialize the content stream for a given page.
+   *
+   * Key correctness rule: any pdf_source object that the user has NOT modified
+   * (obj.isModified is not true) is passed through as the *exact original bytes*
+   * from the source stream. It is never round-tripped through decode -> JS string
+   * -> re-encode, which is what previously caused encoding corruption (non-ASCII
+   * string bytes get mangled by UTF-8 re-encoding), font/positioning drift, and
+   * loss of operators (kerning arrays, word spacing, unsupported color ops, stray
+   * graphics in between grouped text runs) that the simplified object model
+   * doesn't fully capture. Only objects that are actually edited, or newly
+   * user-created, go through the lossy serializer below.
+   *
+   * `sourceStreams` should be the ORIGINAL decoded content stream(s) for this
+   * page, keyed by the same streamIndex values recorded in sourcePdfRef at parse
+   * time (a page can have more than one /Contents stream).
    */
   reconstructPageStream(
     page: PageModel,
     doc: DocumentModel,
-    originalStreamData?: Uint8Array,
+    sourceStreams?: { data: Uint8Array; streamIndex: number }[],
     pageDict?: PdfDict
   ): { streamBytes: Uint8Array; newResources: { fonts: Map<string, PdfRef>; xobjects: Map<string, PdfStream> } } {
     const newFonts = new Map<string, PdfRef>();
     const newXObjects = new Map<string, PdfStream>();
 
-    // 1. Separate objects into:
-    // - PDF-origin objects that were modified or untouched
-    // - User-created objects (new text, images, shapes, tables)
-    // - Deleted objects (present in original stream but removed from page.objects)
-    const activeObjMap = new Map<string, EditableObject>(page.objects.map((o) => [o.id, o]));
-    const userCreatedObjects: EditableObject[] = page.objects.filter((o) => o.origin === 'user_created');
+    const userCreatedObjects: EditableObject[] = page.objects.filter((o) => o.origin === 'user_created' && o.visible);
 
-    let streamOps: ContentOperator[] = [];
-    if (originalStreamData && originalStreamData.length > 0) {
-      const streamParser = new ContentStreamParser(this.parser || new PdfParser(new Uint8Array()), this.fontEngine);
-      streamOps = streamParser.parseOperators(originalStreamData);
-    }
-
-    // 2. Reconstruct original stream with in-place modifications
-    const reconstructedStreamChunks: string[] = [];
-
-    // Find all modified / moved PDF-source objects
-    const sourceObjMapByStartOp = new Map<number, EditableObject>();
+    // Group tracked pdf_source objects by the stream they came from, keyed by
+    // their startOpIndex WITHIN that stream (matches how interpretPage assigns
+    // opIdx, which restarts at 0 for every content stream).
+    const byStream = new Map<number, Map<number, EditableObject>>();
     for (const obj of page.objects) {
       if (obj.origin === 'pdf_source' && obj.sourcePdfRef) {
-        sourceObjMapByStartOp.set(obj.sourcePdfRef.startOpIndex, obj);
+        const streamIdx = obj.sourcePdfRef.streamIndex;
+        if (!byStream.has(streamIdx)) byStream.set(streamIdx, new Map());
+        byStream.get(streamIdx)!.set(obj.sourcePdfRef.startOpIndex, obj);
       }
     }
 
-    if (streamOps.length === 0) {
-      // No original stream: serialize all objects directly as genuine PDF operators
+    const outputChunks: Uint8Array[] = [];
+    const pushText = (s: string) => {
+      if (s) outputChunks.push(new TextEncoder().encode(s));
+    };
+    const pushRaw = (b: Uint8Array) => {
+      if (b.length) outputChunks.push(b);
+    };
+    const NEWLINE = new Uint8Array([0x0a]);
+
+    if (!sourceStreams || sourceStreams.length === 0) {
+      // No original stream available at all (brand new page, or original bytes
+      // weren't retained) - fall back to serializing every object directly.
       for (const obj of page.objects) {
         if (!obj.visible) continue;
         const opString = this.serializeEditableObject(obj, newFonts, newXObjects);
         if (opString) {
-          reconstructedStreamChunks.push(opString);
+          pushText(opString);
+          pushRaw(NEWLINE);
         }
       }
     } else {
-      // Reconstruct original stream with in-place modifications
-      let skipUntilOpIndex = -1;
+      for (const { data, streamIndex } of sourceStreams) {
+        const streamParser = new ContentStreamParser(this.parser || new PdfParser(new Uint8Array()), this.fontEngine);
+        const streamOps = streamParser.parseOperators(data);
+        const trackedForStream = byStream.get(streamIndex) || new Map();
 
-      for (let i = 0; i < streamOps.length; i++) {
-        if (i <= skipUntilOpIndex) {
-          continue;
-        }
+        let skipUntilOpIndex = -1;
 
-        const trackedObj = sourceObjMapByStartOp.get(i);
+        for (let i = 0; i < streamOps.length; i++) {
+          if (i <= skipUntilOpIndex) continue;
 
-        if (trackedObj && trackedObj.sourcePdfRef) {
-          const endIdx = trackedObj.sourcePdfRef.endOpIndex;
-          skipUntilOpIndex = endIdx;
+          const trackedObj = trackedForStream.get(i);
 
-          if (trackedObj.isModified || trackedObj.origin === 'user_created') {
-            if (trackedObj.visible) {
+          if (trackedObj && trackedObj.sourcePdfRef) {
+            const endIdx = trackedObj.sourcePdfRef.endOpIndex;
+            skipUntilOpIndex = endIdx;
+
+            if (!trackedObj.visible) {
+              continue; // deleted by user - emit nothing for this span
+            }
+
+            const wasEdited = trackedObj.isModified === true;
+            if (!wasEdited) {
+              // Byte-exact passthrough of the untouched original span, covering
+              // every operator (and any operators belonging to content that was
+              // merged into this logical object, e.g. consolidated text lines).
+              const startOp = streamOps[i];
+              const endOp = streamOps[Math.min(endIdx, streamOps.length - 1)];
+              if (
+                typeof startOp.startByte === 'number' &&
+                typeof endOp.endByte === 'number'
+              ) {
+                pushRaw(data.subarray(startOp.startByte, endOp.endByte));
+                pushRaw(NEWLINE);
+              } else {
+                // Byte offsets unavailable (shouldn't happen with the current
+                // parser) - fall back to re-serializing rather than dropping data.
+                const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
+                if (opString) {
+                  pushText(opString);
+                  pushRaw(NEWLINE);
+                }
+              }
+            } else {
               const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
               if (opString) {
-                reconstructedStreamChunks.push(opString);
+                pushText(opString);
+                pushRaw(NEWLINE);
               }
             }
           } else {
-            // UNTOUCHED: Pass through original operators verbatim without re-serialization
-            for (let opI = i; opI <= endIdx && opI < streamOps.length; opI++) {
-              const opStr = this.serializeSingleOperator(streamOps[opI]);
+            // Untracked operator (not part of any editable object, e.g. bare
+            // graphics state ops) - pass through byte-exact as well.
+            const op = streamOps[i];
+            if (typeof op.startByte === 'number' && typeof op.endByte === 'number') {
+              pushRaw(data.subarray(op.startByte, op.endByte));
+              pushRaw(NEWLINE);
+            } else {
+              const opStr = this.serializeSingleOperator(op);
               if (opStr) {
-                reconstructedStreamChunks.push(opStr);
+                pushText(opStr);
+                pushRaw(NEWLINE);
               }
             }
-          }
-        } else {
-          const opStr = this.serializeSingleOperator(streamOps[i]);
-          if (opStr) {
-            reconstructedStreamChunks.push(opStr);
           }
         }
       }
 
       // Append newly inserted user elements
       for (const userObj of userCreatedObjects) {
-        if (!userObj.visible) continue;
         const opString = this.serializeEditableObject(userObj, newFonts, newXObjects);
         if (opString) {
-          reconstructedStreamChunks.push(opString);
+          pushText(opString);
+          pushRaw(NEWLINE);
         }
       }
     }
 
-    const fullStreamText = reconstructedStreamChunks.join('\n');
-    const streamBytes = new TextEncoder().encode(fullStreamText);
+    const totalLen = outputChunks.reduce((sum, c) => sum + c.length, 0);
+    const streamBytes = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of outputChunks) {
+      streamBytes.set(chunk, offset);
+      offset += chunk.length;
+    }
 
     return {
       streamBytes,
@@ -164,13 +212,9 @@ export class ContentStreamReconstructor {
     const lines: string[] = [];
     lines.push('q'); // save state
 
-    // Color: support CMYK and RGB
-    if (textObj.cmykColor && textObj.cmykColor.length === 4) {
-      lines.push(`${textObj.cmykColor.map((v) => v.toFixed(3)).join(' ')} k`);
-    } else {
-      const rgb = this.parseColorToRgb(textObj.fillColor);
-      lines.push(`${(rgb.r / 255).toFixed(3)} ${(rgb.g / 255).toFixed(3)} ${(rgb.b / 255).toFixed(3)} rg`);
-    }
+    // Color
+    const rgb = this.parseColorToRgb(textObj.fillColor);
+    lines.push(`${(rgb.r / 255).toFixed(3)} ${(rgb.g / 255).toFixed(3)} ${(rgb.b / 255).toFixed(3)} rg`);
 
     lines.push('BT'); // Begin Text
 
@@ -179,24 +223,21 @@ export class ContentStreamReconstructor {
     if (!fontKey.startsWith('/')) fontKey = '/' + fontKey;
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
 
-    // Character spacing, word spacing, horizontal scale & leading
-    if (textObj.charSpacing && textObj.charSpacing !== 0) {
+    // Character spacing & leading
+    if (textObj.charSpacing !== 0) {
       lines.push(`${textObj.charSpacing.toFixed(2)} Tc`);
     }
-    if (textObj.wordSpacing && textObj.wordSpacing !== 0) {
+    if (textObj.wordSpacing) {
       lines.push(`${textObj.wordSpacing.toFixed(2)} Tw`);
-    }
-    if (textObj.horizontalScale && textObj.horizontalScale !== 100) {
-      lines.push(`${textObj.horizontalScale.toFixed(2)} Tz`);
     }
     if (textObj.lineHeight) {
       lines.push(`${textObj.lineHeight.toFixed(2)} TL`);
     }
 
-    // Set Text Matrix (Tm) to exact PDF baseline position
+    // Set Text Matrix (Tm) to exact PDF position
     const m = textObj.matrix;
     const posX = textObj.pdfBounds.x;
-    const posY = textObj.pdfBounds.y + 0.22 * textObj.fontSize;
+    const posY = textObj.pdfBounds.y;
     lines.push(`${m[0].toFixed(4)} ${m[1].toFixed(4)} ${m[2].toFixed(4)} ${m[3].toFixed(4)} ${posX.toFixed(2)} ${posY.toFixed(2)} Tm`);
 
     // Escape text string
@@ -255,21 +296,13 @@ export class ContentStreamReconstructor {
     const hasFill = shapeObj.fillColor && shapeObj.fillColor !== 'transparent';
 
     if (hasStroke) {
-      if (shapeObj.cmykStroke && shapeObj.cmykStroke.length === 4) {
-        lines.push(`${shapeObj.cmykStroke.map((v) => v.toFixed(3)).join(' ')} K`);
-      } else {
-        const sRgb = this.parseColorToRgb(shapeObj.strokeColor);
-        lines.push(`${(sRgb.r / 255).toFixed(3)} ${(sRgb.g / 255).toFixed(3)} ${(sRgb.b / 255).toFixed(3)} RG`);
-      }
+      const sRgb = this.parseColorToRgb(shapeObj.strokeColor);
+      lines.push(`${(sRgb.r / 255).toFixed(3)} ${(sRgb.g / 255).toFixed(3)} ${(sRgb.b / 255).toFixed(3)} RG`);
     }
 
     if (hasFill) {
-      if (shapeObj.cmykFill && shapeObj.cmykFill.length === 4) {
-        lines.push(`${shapeObj.cmykFill.map((v) => v.toFixed(3)).join(' ')} k`);
-      } else {
-        const fRgb = this.parseColorToRgb(shapeObj.fillColor!);
-        lines.push(`${(fRgb.r / 255).toFixed(3)} ${(fRgb.g / 255).toFixed(3)} ${(fRgb.b / 255).toFixed(3)} rg`);
-      }
+      const fRgb = this.parseColorToRgb(shapeObj.fillColor!);
+      lines.push(`${(fRgb.r / 255).toFixed(3)} ${(fRgb.g / 255).toFixed(3)} ${(fRgb.b / 255).toFixed(3)} rg`);
     }
 
     const { x, y, width: w, height: h } = shapeObj.pdfBounds;

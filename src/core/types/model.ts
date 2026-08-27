@@ -1,4 +1,5 @@
 // Internal Document Model Types
+import type { PdfDict, PdfObject } from './pdf';
 
 export interface Point {
   x: number;
@@ -85,9 +86,9 @@ export interface TextObject extends BaseEditableObject {
   wordSpacing: number;
   horizontalScale?: number;
   fillColor: string; // CSS color or hex
+  cmykColor?: [number, number, number, number];
   strokeColor?: string;
   strokeWidth?: number;
-  cmykColor?: [number, number, number, number];
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -112,8 +113,6 @@ export interface ShapeObject extends BaseEditableObject {
   shapeType: ShapeType;
   strokeColor: string;
   fillColor?: string;
-  cmykFill?: [number, number, number, number];
-  cmykStroke?: [number, number, number, number];
   strokeWidth: number;
   dashArray?: number[];
   arrowStart?: boolean;
@@ -162,6 +161,17 @@ export interface PageModel {
   objects: EditableObject[];
   rawContentStreamIndices: number[];
   unhandledOperatorsCount: number;
+
+  // Original decoded content stream bytes for this page, keyed by streamIndex
+  // (a page can have more than one /Contents stream). Retained so export can
+  // pass through anything the user didn't edit byte-for-byte instead of
+  // regenerating it from the simplified object model. Undefined for
+  // brand-new/blank pages that never came from a source PDF.
+  sourceStreams?: { data: Uint8Array; streamIndex: number }[];
+  // The original /Page dictionary this page was parsed from, so export can
+  // reuse its original Resources (fonts, XObjects, ExtGState, etc.) rather
+  // than fabricating a single fallback font for the whole document.
+  sourcePageDict?: PdfDict;
 }
 
 export interface FontDescriptorModel {
@@ -186,5 +196,9 @@ export interface DocumentModel {
   fonts: Map<string, FontDescriptorModel>;
   isDirty: boolean;
   activePageIndex: number;
-  originalPdfBytes?: Uint8Array;
+
+  // The full original parsed PDF object table + trailer, if this document was
+  // loaded from a file (vs. created blank). Export uses this to copy over
+  // original fonts/resources instead of discarding them.
+  sourcePdf?: { objects: Map<number, PdfObject>; trailer: PdfDict };
 }
