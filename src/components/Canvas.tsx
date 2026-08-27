@@ -1,4 +1,4 @@
-// WYSIWYG Interactive PDF Canvas
+// Minimalist Apple White WYSIWYG Interactive PDF Canvas
 import React, { useEffect, useRef, useState } from 'react';
 import {
   EditableObject,
@@ -6,7 +6,6 @@ import {
   PageModel,
   Rect,
   ShapeObject,
-  TableCell,
   TableObject,
   TextObject,
 } from '../core/types/model';
@@ -58,11 +57,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   const selectedObject = page.objects.find((o) => o.id === selectedObjectId) || null;
 
-  // Screen dimensions of page
   const pageWidthPx = page.width * zoom;
   const pageHeightPx = page.height * zoom;
 
-  // Handle clicking on blank page area
   const handlePageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target !== containerRef.current && (e.target as HTMLElement).dataset.pageBackground !== 'true') {
       return;
@@ -76,7 +73,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     const pdfPt = CoordinateSystem.screenToPdfPoint({ x: clickScreenX, y: clickScreenY }, page, zoom);
 
     if (currentTool === 'text') {
-      // Insert new text object
       const newText: TextObject = {
         id: `txt_user_${Date.now()}`,
         type: 'text',
@@ -96,7 +92,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         lineHeight: 18,
         charSpacing: 0,
         wordSpacing: 0,
-        fillColor: '#0f172a',
+        fillColor: '#1d1d1f',
         bold: false,
         italic: false,
         underline: false,
@@ -118,8 +114,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         visible: true,
         locked: false,
         shapeType: 'rect',
-        strokeColor: '#3b82f6',
-        fillColor: '#dbeafe',
+        strokeColor: '#0071e3',
+        fillColor: '#e8f2ff',
         strokeWidth: 2,
       };
       onInsertNewObject(newShape);
@@ -132,7 +128,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  // Mouse drag handler for moving and resizing
   const handleMouseDown = (e: React.MouseEvent, obj: EditableObject, handle?: ResizeHandle) => {
     if (obj.locked || editingTextId === obj.id) return;
     e.stopPropagation();
@@ -158,7 +153,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       const dyScreen = (e.clientY - activeDrag.startY) / zoom;
 
       if (activeDrag.type === 'move') {
-        // PDF Y axis is inverted relative to screen Y
         const dxPdf = dxScreen;
         const dyPdf = -dyScreen;
 
@@ -232,7 +226,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [activeDrag, selectedObject, zoom, page]);
 
   return (
-    <div className="flex-1 overflow-auto bg-slate-950 flex items-center justify-center p-8 relative select-none">
+    <div className="flex-1 overflow-auto bg-[#f5f5f7] flex items-center justify-center p-8 relative select-none">
       {/* Page Canvas Container */}
       <div
         ref={containerRef}
@@ -242,7 +236,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           width: `${pageWidthPx}px`,
           height: `${pageHeightPx}px`,
         }}
-        className="relative bg-white shadow-2xl rounded-xs ring-1 ring-slate-800 transition-all cursor-default"
+        className="relative bg-white shadow-[0_12px_40px_rgba(0,0,0,0.07)] border border-black/[0.08] rounded-xs transition-all cursor-default"
       >
         {/* Render Editable Objects */}
         {page.objects.map((obj) => {
@@ -270,7 +264,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (obj.type === 'text') setEditingTextId(obj.id);
               }}
               className={`group transition-shadow ${
-                isSelected && !isEditingText ? 'ring-2 ring-indigo-500 shadow-sm' : ''
+                isSelected && !isEditingText ? 'ring-1.5 ring-[#0071e3]' : ''
               } ${obj.locked ? 'cursor-not-allowed' : 'cursor-move'}`}
             >
               {/* Text Object Rendering */}
@@ -295,14 +289,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                           ? 'Times New Roman, serif'
                           : (obj as TextObject).fontName.includes('Courier')
                           ? 'Courier New, monospace'
-                          : 'Helvetica, Arial, sans-serif',
+                          : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         color: (obj as TextObject).fillColor,
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         lineHeight: `${(obj as TextObject).lineHeight * zoom || (obj as TextObject).fontSize * 1.2 * zoom}px`,
                       }}
-                      className="w-full h-full bg-white/95 text-slate-900 border border-indigo-500 rounded p-1 resize-none focus:outline-none shadow-lg z-50"
+                      className="w-full h-full bg-white text-[#1d1d1f] border border-[#0071e3] rounded p-1 resize-none focus:outline-none shadow-md z-50 ring-2 ring-[#0071e3]/20"
                     />
                   ) : (
                     <div
@@ -311,7 +305,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                           ? 'Times New Roman, serif'
                           : (obj as TextObject).fontName.includes('Courier')
                           ? 'Courier New, monospace'
-                          : 'Helvetica, Arial, sans-serif',
+                          : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         color: (obj as TextObject).fillColor,
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
@@ -369,7 +363,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
               {/* Table Object Rendering */}
               {obj.type === 'table' && (
-                <div className="w-full h-full overflow-hidden border border-slate-300 shadow-xs">
+                <div className="w-full h-full overflow-hidden border border-black/[0.1] shadow-xs">
                   <table className="w-full h-full border-collapse">
                     <tbody>
                       {(obj as TableObject).cells.map((rowCells, r) => (
@@ -396,7 +390,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                   e.stopPropagation();
                                   setEditingCell({ tableId: obj.id, row: r, col: c });
                                 }}
-                                className="relative select-none hover:ring-1 hover:ring-indigo-400"
+                                className="relative select-none hover:ring-1 hover:ring-[#0071e3]"
                               >
                                 {isEditingThisCell ? (
                                   <input
@@ -412,7 +406,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         setEditingCell(null);
                                       }
                                     }}
-                                    className="w-full h-full bg-white text-slate-900 px-1 rounded focus:outline-none ring-2 ring-indigo-500"
+                                    className="w-full h-full bg-white text-[#1d1d1f] px-1 rounded focus:outline-none ring-2 ring-[#0071e3]"
                                   />
                                 ) : (
                                   cell.text
@@ -427,32 +421,32 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
 
-              {/* Transform & Resize Handles (Visible when selected) */}
+              {/* Apple-Style Transform & Resize Handles */}
               {isSelected && !isEditingText && (
                 <>
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'tl')}
-                    className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize shadow"
+                    className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-nwse-resize shadow-xs"
                   />
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'tr')}
-                    className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize shadow"
+                    className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-nesw-resize shadow-xs"
                   />
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'bl')}
-                    className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize shadow"
+                    className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-nesw-resize shadow-xs"
                   />
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'br')}
-                    className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize shadow"
+                    className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-nwse-resize shadow-xs"
                   />
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'mr')}
-                    className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-ew-resize shadow"
+                    className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-ew-resize shadow-xs"
                   />
                   <div
                     onMouseDown={(e) => handleMouseDown(e, obj, 'bc')}
-                    className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-ns-resize shadow"
+                    className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 border-[#0071e3] rounded-full cursor-ns-resize shadow-xs"
                   />
                 </>
               )}

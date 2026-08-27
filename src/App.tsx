@@ -1,4 +1,4 @@
-// Main Application Component for True WYSIWYG PDF Editor
+// Main Application Component for True WYSIWYG PDF Editor (Apple White Edition)
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   DocumentModel,
@@ -6,7 +6,6 @@ import {
   ImageObject,
   PageModel,
   Rect,
-  ShapeObject,
   TableObject,
   TextObject,
 } from './core/types/model';
@@ -30,17 +29,18 @@ import { PageNavigation } from './components/PageNavigation';
 import { Canvas } from './components/Canvas';
 import { Inspector } from './components/Inspector';
 import { TableModal } from './components/TableModal';
+import { Loader2, Upload } from 'lucide-react';
 
 export const App: React.FC = () => {
-  // Initialize with the rich Invoice sample
   const [doc, setDoc] = useState<DocumentModel>(() => SamplePdfs.createInvoiceSample());
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>('select');
   const [zoom, setZoom] = useState(1.0);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
-  // Command & History Manager
   const [historyState, setHistoryState] = useState<HistoryState>({
     canUndo: false,
     canRedo: false,
@@ -55,10 +55,45 @@ export const App: React.FC = () => {
   const activePage = doc.pages[activePageIndex] || doc.pages[0];
   const selectedObject = activePage?.objects.find((o) => o.id === selectedObjectId) || null;
 
-  // --- Keyboard Shortcuts (Undo, Redo, Delete, Escape) ---
+  // --- Global Drag and Drop File Upload ---
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer?.types.includes('Files')) {
+        setIsDraggingFile(true);
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      if (e.clientX === 0 || e.clientY === 0) {
+        setIsDraggingFile(false);
+      }
+    };
+
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      setIsDraggingFile(false);
+      if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
+        const file = e.dataTransfer.files[0];
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          await handleOpenPdf(file);
+        }
+      }
+    };
+
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDrop);
+    return () => {
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, []);
+
+  // --- Keyboard Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept when typing in inputs/textareas
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -92,7 +127,6 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [doc, activePageIndex, selectedObjectId]);
 
-  // --- Undo & Redo Handlers ---
   const handleUndo = () => {
     const newDoc = commandManager.undo(doc);
     setDoc(newDoc);
@@ -103,7 +137,6 @@ export const App: React.FC = () => {
     setDoc(newDoc);
   };
 
-  // --- Object Operations via Commands ---
   const handleCommitTextEdit = (objectId: string, newText: string, oldText: string) => {
     const cmd = new EditTextCommand(activePageIndex, objectId, newText, oldText);
     const newDoc = commandManager.execute(cmd, doc);
@@ -193,7 +226,6 @@ export const App: React.FC = () => {
     });
   };
 
-  // --- Page Operations ---
   const handleAddPage = () => {
     const newPage = DocumentModelManager.createBlankPage(doc.pages.length);
     setDoc({
@@ -227,8 +259,8 @@ export const App: React.FC = () => {
     setActivePageIndex(Math.max(0, pageIdx - 1));
   };
 
-  // --- File & Sample Loading ---
   const handleOpenPdf = async (file: File) => {
+    setIsLoading(true);
     try {
       const buffer = await file.arrayBuffer();
       const { doc: loadedDoc } = await DocumentModelManager.loadPdfFromBuffer(buffer, file.name);
@@ -239,6 +271,8 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('Failed to open PDF:', err);
       alert('Could not parse PDF file. Ensure it is a valid PDF document.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -295,13 +329,11 @@ export const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  // --- PDF Export ---
   const handleExportPdf = () => {
     try {
       const writer = new PdfWriter();
       const pdfBytes = writer.exportDocument(doc);
 
-      // Create download blob
       const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -318,7 +350,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
+    <div className="w-screen h-screen flex flex-col bg-[#f5f5f7] text-[#1d1d1f] overflow-hidden font-sans">
       {/* Top Toolbar */}
       <Toolbar
         currentTool={currentTool}
@@ -337,6 +369,7 @@ export const App: React.FC = () => {
         onPageChange={setActivePageIndex}
         onInsertImageFile={handleInsertImageFile}
         onOpenTableModal={() => setIsTableModalOpen(true)}
+        isLoading={isLoading}
       />
 
       {/* Main Workspace Area */}
@@ -389,6 +422,25 @@ export const App: React.FC = () => {
         onCreateTable={handleInsertNewObject}
         pageIndex={activePageIndex}
       />
+
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="fixed inset-0 bg-white/70 backdrop-blur-xs z-50 flex items-center justify-center space-x-2 text-[#1d1d1f]">
+          <Loader2 className="w-5 h-5 animate-spin text-[#0071e3]" />
+          <span className="text-xs font-semibold">Parsing PDF structure...</span>
+        </div>
+      )}
+
+      {/* Drag and Drop Full Screen Overlay */}
+      {isDraggingFile && (
+        <div className="fixed inset-0 bg-[#0071e3]/10 backdrop-blur-xs z-50 flex items-center justify-center p-8 pointer-events-none">
+          <div className="bg-white/95 rounded-2xl border-2 border-dashed border-[#0071e3] p-10 flex flex-col items-center space-y-3 shadow-2xl">
+            <Upload className="w-10 h-10 text-[#0071e3] animate-bounce" />
+            <h3 className="text-sm font-semibold text-[#1d1d1f]">Drop PDF to Open</h3>
+            <p className="text-xs text-[#86868b]">Release file anywhere to edit</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

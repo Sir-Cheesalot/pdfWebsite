@@ -1,20 +1,19 @@
-// Top Toolbar Component
+// Minimalist Apple White Top Toolbar Component
 import React, { useRef } from 'react';
 import {
   ArrowDownNarrowWide,
-  Circle,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FolderOpen,
   Image as ImageIcon,
-  Minus,
   MousePointer,
-  Plus,
   Redo2,
-  RotateCcw,
   Square,
   Table as TableIcon,
   Type,
   Undo2,
+  Upload,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -40,6 +39,7 @@ interface ToolbarProps {
   onPageChange: (index: number) => void;
   onInsertImageFile: (file: File) => void;
   onOpenTableModal: () => void;
+  isLoading?: boolean;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -59,6 +59,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onPageChange,
   onInsertImageFile,
   onOpenTableModal,
+  isLoading,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -66,17 +67,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       onOpenPdf(e.target.files[0]);
+      e.target.value = '';
     }
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       onInsertImageFile(e.target.files[0]);
+      e.target.value = '';
     }
   };
 
   return (
-    <header className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 select-none shrink-0 z-30">
+    <header className="h-13 bg-white/90 backdrop-blur-xl border-b border-black/[0.08] flex items-center justify-between px-4 select-none shrink-0 z-30 shadow-xs">
       {/* Hidden file inputs */}
       <input
         type="file"
@@ -93,25 +96,26 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         className="hidden"
       />
 
-      {/* Left section: App Brand & File Operations */}
+      {/* Left section: Clean App Name & File Actions */}
       <div className="flex items-center space-x-2">
-        <div className="flex items-center space-x-2 pr-3 border-r border-slate-800">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-500/20 text-sm">
+        <div className="flex items-center space-x-2 pr-3 border-r border-black/[0.08]">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-b from-[#1d1d1f] to-[#3a3a3c] flex items-center justify-center font-bold text-white shadow-xs text-xs">
             PDF
           </div>
-          <span className="font-semibold text-sm tracking-wide text-slate-100 hidden sm:inline">
-            WYSIWYG <span className="text-indigo-400 font-bold">Pro</span>
+          <span className="font-semibold text-xs tracking-tight text-[#1d1d1f] hidden sm:inline">
+            Editor
           </span>
         </div>
 
-        {/* File Actions */}
+        {/* Upload Button */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+          disabled={isLoading}
+          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#1d1d1f] bg-[#f5f5f7] hover:bg-[#e8e8ed] transition-colors border border-black/[0.04] disabled:opacity-50"
           title="Open local PDF"
         >
-          <FolderOpen className="w-4 h-4 text-sky-400" />
-          <span>Open PDF</span>
+          <Upload className="w-3.5 h-3.5 text-[#0071e3]" />
+          <span>Upload PDF</span>
         </button>
 
         {/* Sample selector */}
@@ -123,53 +127,53 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             e.target.value = '';
           }}
           defaultValue=""
-          className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-md px-2 py-1.5 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+          className="bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#424245] text-xs rounded-lg px-2.5 py-1.5 border border-black/[0.04] focus:outline-none focus:ring-1 focus:ring-[#0071e3] transition-colors cursor-pointer"
         >
           <option value="" disabled>
-            ⚡ Load Sample
+            Samples
           </option>
-          <option value="invoice">💼 Invoice with Table & Layout</option>
-          <option value="academic">📄 Academic Research Report</option>
-          <option value="new">✨ Blank Document</option>
+          <option value="invoice">Invoice with Table</option>
+          <option value="academic">Academic Report</option>
+          <option value="new">Blank Document</option>
         </select>
 
         {/* Undo / Redo */}
-        <div className="flex items-center space-x-0.5 pl-2 border-l border-slate-800">
+        <div className="flex items-center space-x-0.5 pl-1.5 border-l border-black/[0.08]">
           <button
             onClick={onUndo}
             disabled={!historyState.canUndo}
-            className={`p-1.5 rounded text-slate-300 transition-colors ${
+            className={`p-1.5 rounded-md text-[#424245] transition-colors ${
               historyState.canUndo
-                ? 'hover:bg-slate-800 hover:text-white'
-                : 'opacity-40 cursor-not-allowed'
+                ? 'hover:bg-[#f5f5f7] hover:text-[#1d1d1f]'
+                : 'opacity-30 cursor-not-allowed'
             }`}
             title="Undo (Ctrl+Z)"
           >
-            <Undo2 className="w-4 h-4" />
+            <Undo2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onRedo}
             disabled={!historyState.canRedo}
-            className={`p-1.5 rounded text-slate-300 transition-colors ${
+            className={`p-1.5 rounded-md text-[#424245] transition-colors ${
               historyState.canRedo
-                ? 'hover:bg-slate-800 hover:text-white'
-                : 'opacity-40 cursor-not-allowed'
+                ? 'hover:bg-[#f5f5f7] hover:text-[#1d1d1f]'
+                : 'opacity-30 cursor-not-allowed'
             }`}
             title="Redo (Ctrl+Y)"
           >
-            <Redo2 className="w-4 h-4" />
+            <Redo2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Center section: Editing Tools */}
-      <div className="flex items-center space-x-1 bg-slate-950/70 p-1 rounded-lg border border-slate-800">
+      {/* Center section: Apple Segmented Tool Palette */}
+      <div className="flex items-center space-x-1 bg-[#efeff4] p-0.5 rounded-xl border border-black/[0.04]">
         <button
           onClick={() => onSelectTool('select')}
-          className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs transition-all ${
             currentTool === 'select'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              ? 'bg-white text-[#1d1d1f] font-semibold shadow-xs'
+              : 'text-[#6e6e73] hover:text-[#1d1d1f] font-medium'
           }`}
           title="Select & Move (V)"
         >
@@ -179,10 +183,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         <button
           onClick={() => onSelectTool('text')}
-          className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs transition-all ${
             currentTool === 'text'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              ? 'bg-white text-[#1d1d1f] font-semibold shadow-xs'
+              : 'text-[#6e6e73] hover:text-[#1d1d1f] font-medium'
           }`}
           title="Add or Edit Text (T)"
         >
@@ -192,20 +196,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         <button
           onClick={() => imageInputRef.current?.click()}
-          className="flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all"
+          className="flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-medium text-[#6e6e73] hover:text-[#1d1d1f] transition-all"
           title="Insert Image (I)"
         >
           <ImageIcon className="w-3.5 h-3.5" />
           <span>Image</span>
         </button>
 
-        {/* Shape dropdown */}
         <button
           onClick={() => onSelectTool('shape_rect')}
-          className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs transition-all ${
             currentTool.startsWith('shape')
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              ? 'bg-white text-[#1d1d1f] font-semibold shadow-xs'
+              : 'text-[#6e6e73] hover:text-[#1d1d1f] font-medium'
           }`}
           title="Add Rectangle"
         >
@@ -213,23 +216,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <span>Shape</span>
         </button>
 
-        {/* Table creator */}
         <button
           onClick={onOpenTableModal}
-          className="flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all"
+          className="flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-medium text-[#6e6e73] hover:text-[#1d1d1f] transition-all"
           title="Insert Logical Table"
         >
-          <TableIcon className="w-3.5 h-3.5 text-emerald-400" />
+          <TableIcon className="w-3.5 h-3.5" />
           <span>Table</span>
         </button>
 
-        {/* Smart Push Tool */}
         <button
           onClick={() => onSelectTool('smart_push')}
-          className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs transition-all ${
             currentTool === 'smart_push'
-              ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-400'
-              : 'text-amber-400 hover:text-amber-300 hover:bg-slate-800'
+              ? 'bg-[#0071e3] text-white font-semibold shadow-xs'
+              : 'text-[#0071e3] hover:bg-white/60 font-medium'
           }`}
           title="Smart Push: Displace downstream content downward"
         >
@@ -238,23 +239,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </button>
       </div>
 
-      {/* Right section: Zoom, Page Navigation & Export */}
+      {/* Right section: Zoom, Page Navigation & Clean Apple Blue Export */}
       <div className="flex items-center space-x-3">
         {/* Zoom controls */}
-        <div className="flex items-center space-x-1 bg-slate-800/80 rounded-md px-1.5 py-0.5 border border-slate-700">
+        <div className="flex items-center space-x-1 bg-[#efeff4] rounded-lg px-1.5 py-0.5 border border-black/[0.04]">
           <button
             onClick={() => onZoomChange(Math.max(0.4, zoom - 0.15))}
-            className="p-1 text-slate-400 hover:text-white rounded"
+            className="p-1 text-[#6e6e73] hover:text-[#1d1d1f] rounded"
             title="Zoom Out"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
-          <span className="text-xs font-medium text-slate-300 w-12 text-center">
+          <span className="text-xs font-medium text-[#1d1d1f] w-10 text-center font-mono">
             {Math.round(zoom * 100)}%
           </span>
           <button
             onClick={() => onZoomChange(Math.min(2.5, zoom + 0.15))}
-            className="p-1 text-slate-400 hover:text-white rounded"
+            className="p-1 text-[#6e6e73] hover:text-[#1d1d1f] rounded"
             title="Zoom In"
           >
             <ZoomIn className="w-3.5 h-3.5" />
@@ -262,30 +263,30 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* Page Switcher */}
-        <div className="flex items-center space-x-1 text-xs text-slate-400">
+        <div className="flex items-center space-x-1 text-xs text-[#6e6e73] font-medium bg-[#efeff4] px-1.5 py-0.5 rounded-lg border border-black/[0.04]">
           <button
             onClick={() => onPageChange(Math.max(0, currentPageIndex - 1))}
             disabled={currentPageIndex <= 0}
-            className="p-1 hover:text-white disabled:opacity-30"
+            className="p-1 hover:text-[#1d1d1f] disabled:opacity-30"
           >
-            &lt;
+            <ChevronLeft className="w-3 h-3" />
           </button>
-          <span>
+          <span className="px-1 text-[#1d1d1f]">
             {currentPageIndex + 1} / {doc.pages.length}
           </span>
           <button
             onClick={() => onPageChange(Math.min(doc.pages.length - 1, currentPageIndex + 1))}
             disabled={currentPageIndex >= doc.pages.length - 1}
-            className="p-1 hover:text-white disabled:opacity-30"
+            className="p-1 hover:text-[#1d1d1f] disabled:opacity-30"
           >
-            &gt;
+            <ChevronRight className="w-3 h-3" />
           </button>
         </div>
 
-        {/* Export Button */}
+        {/* Apple Blue Export Button */}
         <button
           onClick={onExportPdf}
-          className="flex items-center space-x-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-semibold px-3.5 py-1.5 rounded-md shadow-md shadow-indigo-500/25 transition-all transform active:scale-95"
+          className="flex items-center space-x-1.5 bg-[#0071e3] hover:bg-[#0077ed] active:scale-[0.98] text-white text-xs font-medium px-3.5 py-1.5 rounded-lg shadow-xs transition-all"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Export PDF</span>

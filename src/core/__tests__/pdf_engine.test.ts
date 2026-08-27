@@ -332,6 +332,13 @@ describe('8. Workspace Sample PDF Verification', () => {
       const uint8 = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
       const arrayBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength) as ArrayBuffer;
       const { doc } = await DocumentModelManager.loadPdfFromBuffer(arrayBuffer, 'Exam_Paper.pdf');
+      console.log('Parsed pages count:', doc.pages.length);
+      for (let i = 0; i < Math.min(3, doc.pages.length); i++) {
+        console.log(`Page ${i + 1} objects count:`, doc.pages[i].objects.length);
+        const textCount = doc.pages[i].objects.filter((o) => o.type === 'text').length;
+        const imgCount = doc.pages[i].objects.filter((o) => o.type === 'image').length;
+        console.log(`  Texts: ${textCount}, Images: ${imgCount}`);
+      }
       expect(doc.pages.length).toBeGreaterThan(0);
       expect(doc.pages[0].width).toBeGreaterThan(0);
       expect(doc.pages[0].height).toBeGreaterThan(0);

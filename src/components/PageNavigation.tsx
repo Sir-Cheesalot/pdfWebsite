@@ -1,4 +1,4 @@
-// Left Sidebar for Page Thumbnails and Management
+// Minimalist Apple White Left Sidebar for Page Thumbnails and Management
 import React from 'react';
 import { Copy, FilePlus, Layers, Trash2 } from 'lucide-react';
 import { DocumentModel } from '../core/types/model';
@@ -21,16 +21,16 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({
   onDeletePage,
 }) => {
   return (
-    <aside className="w-56 bg-slate-900 border-r border-slate-800 flex flex-col h-full select-none shrink-0 z-20">
+    <aside className="w-52 bg-white border-r border-black/[0.08] flex flex-col h-full select-none shrink-0 z-20">
       {/* Header */}
-      <div className="p-3 border-b border-slate-800 flex items-center justify-between">
-        <div className="flex items-center space-x-2 text-slate-300">
-          <Layers className="w-4 h-4 text-indigo-400" />
-          <span className="text-xs font-semibold uppercase tracking-wider">Pages ({doc.pages.length})</span>
+      <div className="px-3.5 py-3 border-b border-black/[0.06] flex items-center justify-between">
+        <div className="flex items-center space-x-1.5 text-[#1d1d1f]">
+          <Layers className="w-3.5 h-3.5 text-[#0071e3]" />
+          <span className="text-xs font-semibold tracking-tight">Pages ({doc.pages.length})</span>
         </div>
         <button
           onClick={onAddPage}
-          className="p-1 rounded bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-white transition-colors"
+          className="p-1 rounded-md text-[#0071e3] hover:bg-[#f5f5f7] transition-colors"
           title="Add Blank Page"
         >
           <FilePlus className="w-3.5 h-3.5" />
@@ -38,7 +38,7 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({
       </div>
 
       {/* Thumbnails list */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
         {doc.pages.map((page, idx) => {
           const isActive = idx === activePageIndex;
           const aspectRatio = (page.height / page.width) * 100;
@@ -47,39 +47,39 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({
             <div
               key={`page_thumb_${idx}`}
               onClick={() => onSelectPage(idx)}
-              className={`group relative rounded-lg p-2 cursor-pointer transition-all border ${
+              className={`group relative rounded-xl p-2 cursor-pointer transition-all border ${
                 isActive
-                  ? 'bg-slate-800/90 border-indigo-500 shadow-md shadow-indigo-500/10 ring-1 ring-indigo-500'
-                  : 'bg-slate-950/40 border-slate-800 hover:bg-slate-800/50 hover:border-slate-700'
+                  ? 'bg-[#f5f5f7] border-[#0071e3] ring-1 ring-[#0071e3] shadow-xs'
+                  : 'bg-white border-black/[0.06] hover:bg-[#fafafa] hover:border-black/[0.12]'
               }`}
             >
               <div className="flex items-center justify-between mb-1.5 px-0.5">
-                <span className={`text-[11px] font-semibold ${isActive ? 'text-indigo-400' : 'text-slate-400'}`}>
+                <span className={`text-[11px] font-medium ${isActive ? 'text-[#0071e3] font-semibold' : 'text-[#6e6e73]'}`}>
                   Page {idx + 1}
                 </span>
-                <span className="text-[10px] text-slate-500">
+                <span className="text-[10px] text-[#86868b]">
                   {page.objects.length} obj
                 </span>
               </div>
 
               {/* Page Visual Preview Box */}
               <div
-                className="w-full bg-white rounded shadow-inner relative overflow-hidden flex flex-col items-center justify-center border border-slate-300"
+                className="w-full bg-white rounded-lg shadow-xs relative overflow-hidden flex flex-col items-center justify-center border border-black/[0.08]"
                 style={{ paddingBottom: `${Math.min(130, aspectRatio)}%` }}
               >
                 {/* Micro preview representations */}
-                <div className="absolute inset-2 flex flex-col space-y-1 overflow-hidden opacity-60">
-                  {page.objects.slice(0, 6).map((obj) => (
+                <div className="absolute inset-2 flex flex-col space-y-1 overflow-hidden opacity-40">
+                  {page.objects.slice(0, 5).map((obj) => (
                     <div
                       key={obj.id}
                       className={`h-1.5 rounded-xs ${
                         obj.type === 'text'
-                          ? 'bg-slate-700 w-3/4'
+                          ? 'bg-[#1d1d1f] w-3/4'
                           : obj.type === 'table'
-                          ? 'bg-indigo-400 w-full'
+                          ? 'bg-[#0071e3] w-full'
                           : obj.type === 'image'
-                          ? 'bg-sky-400 w-1/2 h-3'
-                          : 'bg-amber-400 w-2/3'
+                          ? 'bg-[#34c759] w-1/2 h-2.5'
+                          : 'bg-[#ff9500] w-2/3'
                       }`}
                     />
                   ))}
@@ -87,13 +87,13 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({
               </div>
 
               {/* Quick actions on hover */}
-              <div className="absolute top-2 right-2 hidden group-hover:flex items-center space-x-1 bg-slate-900/90 backdrop-blur-xs p-1 rounded border border-slate-700 shadow-lg">
+              <div className="absolute top-2 right-2 hidden group-hover:flex items-center space-x-1 bg-white/95 backdrop-blur-xs p-0.5 rounded-lg border border-black/[0.08] shadow-xs">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onDuplicatePage(idx);
                   }}
-                  className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800"
+                  className="p-1 text-[#6e6e73] hover:text-[#1d1d1f] rounded-md hover:bg-[#f5f5f7]"
                   title="Duplicate Page"
                 >
                   <Copy className="w-3 h-3" />
@@ -104,7 +104,7 @@ export const PageNavigation: React.FC<PageNavigationProps> = ({
                       e.stopPropagation();
                       onDeletePage(idx);
                     }}
-                    className="p-1 text-red-400 hover:text-red-300 rounded hover:bg-red-950"
+                    className="p-1 text-[#ff3b30] hover:text-[#d70015] rounded-md hover:bg-red-50"
                     title="Delete Page"
                   >
                     <Trash2 className="w-3 h-3" />

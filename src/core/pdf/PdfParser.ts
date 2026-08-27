@@ -200,18 +200,69 @@ export class PdfParser {
         if (type === 1) {
           // Standard uncompressed object: field2 is offset, field3 is generation
           this.xrefs.set(objNum, { offset: field2, gen: field3, inUse: true });
+        } else if (type === 2) {
+          // Compressed object inside Object Stream: field2 is ObjStm object number, field3 is index
+          this.compressedObjMap.set(objNum, { stmObjNum: field2, indexInStm: field3 });
         }
       }
     }
   }
 
+  private compressedObjMap = new Map<number, { stmObjNum: number; indexInStm: number }>();
+
   private loadAllObjects() {
+    // 1. Load standard uncompressed objects from xref table
     for (const [objNum, entry] of this.xrefs.entries()) {
       if (entry.inUse && !this.objects.has(objNum)) {
         this.lexer.seek(entry.offset);
         const obj = this.parseIndirectObject();
         if (obj !== null) {
           this.objects.set(objNum, obj);
+        }
+      }
+    }
+
+    // 2. Unpack compressed objects from Object Streams (/Type /ObjStm)
+    const stmObjNums = new Set<number>();
+    for (const { stmObjNum } of this.compressedObjMap.values()) {
+      stmObjNums.add(stmObjNum);
+    }
+
+    for (const stmObjNum of stmObjNums) {
+      const stmObj = this.objects.get(stmObjNum);
+      if (stmObj instanceof PdfStream) {
+        this.unpackObjectStream(stmObj);
+      }
+    }
+  }
+
+  private unpackObjectStream(stream: PdfStream) {
+    const decoded = stream.decodedData || FlateDecoder.decodeStream(stream);
+    const n = Number(stream.dict.get('N') || 0);
+    const first = Number(stream.dict.get('First') || 0);
+    if (n <= 0 || first <= 0) return;
+
+    const streamLexer = new PdfLexer(decoded);
+    const entries: { objNum: number; offset: number }[] = [];
+
+    for (let i = 0; i < n; i++) {
+      const numTok = streamLexer.nextToken();
+      const offTok = streamLexer.nextToken();
+      if (numTok && numTok.type === 'number' && offTok && offTok.type === 'number') {
+        entries.push({ objNum: numTok.value, offset: offTok.value });
+      }
+    }
+
+    for (let i = 0; i < entries.length; i++) {
+      const { objNum, offset } = entries[i];
+      const targetPos = first + offset;
+      if (targetPos < decoded.length) {
+        streamLexer.seek(targetPos);
+        const tempParser = new PdfParser(decoded);
+        (tempParser as any).lexer.seek(targetPos);
+        const parsed = (tempParser as any).parseObject();
+        if (parsed !== null && !this.objects.has(objNum)) {
+          this.objects.set(objNum, parsed);
         }
       }
     }
