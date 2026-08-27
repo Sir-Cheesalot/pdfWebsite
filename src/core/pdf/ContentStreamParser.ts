@@ -24,6 +24,7 @@ import { CoordinateSystem } from '../coords/CoordinateSystem';
 import { FontEngine } from './FontEngine';
 import { PdfLexer } from './PdfLexer';
 import { PdfParser } from './PdfParser';
+import { OcrVerificationEngine } from '../ocr/OcrVerificationEngine';
 
 interface GraphicsState {
   ctm: Matrix2D;
@@ -574,9 +575,10 @@ export class ContentStreamParser {
 
     flushActiveText();
     const consolidatedObjects = this.consolidateTextObjects(objects, pageIndex);
-    pageModel.objects = consolidatedObjects;
+    const verifiedObjects = OcrVerificationEngine.verifyPageObjects(consolidatedObjects);
+    pageModel.objects = verifiedObjects;
 
-    return { page: pageModel, objects: consolidatedObjects };
+    return { page: pageModel, objects: verifiedObjects };
   }
 
   /**

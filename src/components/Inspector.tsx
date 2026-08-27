@@ -1,4 +1,3 @@
-// Minimalist Apple White Right Inspector Panel
 import React, { useState } from 'react';
 import {
   ArrowDownNarrowWide,
@@ -10,6 +9,7 @@ import {
   Lock,
   MousePointer,
   Plus,
+  ScanText,
   Sliders,
   Table as TableIcon,
   Trash2,
@@ -18,6 +18,7 @@ import {
   Unlock,
 } from 'lucide-react';
 import { EditableObject, PageModel, ShapeObject, TableObject, TextObject } from '../core/types/model';
+import { OcrVerificationEngine } from '../core/ocr/OcrVerificationEngine';
 
 interface InspectorProps {
   selectedObject: EditableObject | null;
@@ -216,6 +217,24 @@ export const Inspector: React.FC<InspectorProps> = ({
                         title="Text Color"
                       />
                     </div>
+                  </div>
+
+                  {/* OCR Double-Check */}
+                  <div className="pt-2 border-t border-black/[0.06] flex items-center justify-between">
+                    <div className="flex items-center space-x-1 text-[10px] text-[#6e6e73]">
+                      <ScanText className="w-3 h-3 text-[#0071e3]" />
+                      <span>OCR Verify</span>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const verified = await OcrVerificationEngine.performBrowserOcr(textObj, activePage);
+                        onUpdateObject({ text: verified });
+                      }}
+                      className="px-2.5 py-1 bg-white hover:bg-[#fafafa] border border-black/[0.08] text-[#0071e3] text-[10px] font-medium rounded-lg shadow-xs transition-colors"
+                      title="Double-check with OCR and fix exotic or corrupted glyphs"
+                    >
+                      Verify Text
+                    </button>
                   </div>
                 </div>
               )}
