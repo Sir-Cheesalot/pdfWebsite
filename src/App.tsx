@@ -28,6 +28,7 @@ import { PageNavigation } from './components/PageNavigation';
 import { Canvas } from './components/Canvas';
 import { Inspector } from './components/Inspector';
 import { TableModal } from './components/TableModal';
+import { ConsolePanel, LogEntry } from './components/ConsolePanel';
 import { FullPageOcrReconciler } from './core/ocr/FullPageOcrReconciler';
 import { OcrVerificationEngine } from './core/ocr/OcrVerificationEngine';
 import { Loader2, Upload } from 'lucide-react';
@@ -46,7 +47,28 @@ export const App: React.FC = () => {
   const [ocrProgressMsg, setOcrProgressMsg] = useState('');
   const [operatorTextLines, setOperatorTextLines] = useState<OperatorTextLine[]>([]);
   const [currentSourcePdf, setCurrentSourcePdf] = useState<ArrayBuffer | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([
+    {
+      id: 'init_1',
+      timestamp: new Date().toLocaleTimeString(),
+      category: 'INFO',
+      message: 'PDF Engine ready. Upload a document or create elements.',
+    },
+  ]);
   const pdfSourceRef = useRef<ArrayBuffer | null>(null);
+
+  const addLog = (category: LogEntry['category'], message: string, details?: any) => {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    const entry: LogEntry = {
+      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: timeStr,
+      category,
+      message,
+      details,
+    };
+    setLogs((prev) => [entry, ...prev.slice(0, 199)]);
+  };
 
   const [historyState, setHistoryState] = useState<HistoryState>({
     canUndo: false,
@@ -62,18 +84,32 @@ export const App: React.FC = () => {
   const activePage = doc.pages[activePageIndex] || doc.pages[0];
   const selectedObject = activePage?.objects.find((o) => o.id === selectedObjectId) || null;
 
+  const totalObjectsCount = doc.pages.reduce((acc, p) => acc + p.objects.length, 0);
+  const editedCount = doc.pages.reduce(
+    (acc, p) => acc + p.objects.filter((o) => o.isModified || o.origin === 'user_created').length,
+    0
+  );
+
   useEffect(() => {
     if (!pdfSourceRef.current) return;
     let cancelled = false;
     inspectPdfOperatorText(pdfSourceRef.current, activePageIndex + 1)
       .then((lines) => {
-        if (!cancelled) setOperatorTextLines(lines);
+        if (!cancelled) {
+          setOperatorTextLines(lines);
+          addLog(
+            'OPERATOR',
+            `Page ${activePageIndex + 1}: Indexed ${lines.length} PDF text operator instructions (Tj/TJ/showText)`
+          );
+        }
       })
       .catch((error) => {
         console.warn('PDF operator inspection unavailable:', error);
         if (!cancelled) setOperatorTextLines([]);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [activePageIndex, doc.id]);
 
   // --- Global Drag and Drop File Upload ---
@@ -155,17 +191,21 @@ export const App: React.FC = () => {
   const handleUndo = () => {
     const newDoc = commandManager.undo(doc);
     setDoc(newDoc);
+    addLog('STATE', 'Undo executed');
   };
 
   const handleRedo = () => {
     const newDoc = commandManager.redo(doc);
     setDoc(newDoc);
+    addLog('STATE', 'Redo executed');
   };
 
   const handleCommitTextEdit = (objectId: string, newText: string, oldText: string) => {
     const cmd = new EditTextCommand(activePageIndex, objectId, newText, oldText);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+
+    addLog('EDIT', `Text modified: "${oldText}" ➔ "${newText}"`, { objectId, page: activePageIndex + 1 });
 
     // Surgically update the underlying PDF.js drawing instruction
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
@@ -181,6 +221,12 @@ export const App: React.FC = () => {
       if (matchingLine) {
         matchingLine.applyEdit(newText);
         setOperatorTextLines([...operatorTextLines]);
+        addLog(
+          'STREAM',
+          `Mutated PDF drawing instruction at baseline Y=${matchingLine.y.toFixed(1)} (Ops: [${matchingLine.operatorIndexes.join(
+            ', '
+          )}])`
+        );
       }
     }
   };
@@ -189,12 +235,14 @@ export const App: React.FC = () => {
     const cmd = new MoveObjectCommand(activePageIndex, objectId, dxPdf, dyPdf);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+    addLog('EDIT', `Moved object "${objectId}" by (Δx: ${dxPdf.toFixed(1)}pt, Δy: ${dyPdf.toFixed(1)}pt)`);
   };
 
   const handleCommitObjectResize = (objectId: string, newBounds: Rect, oldBounds: Rect) => {
     const cmd = new ResizeObjectCommand(activePageIndex, objectId, newBounds, oldBounds);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+    addLog('EDIT', `Resized object "${objectId}" to (${newBounds.width.toFixed(1)} × ${newBounds.height.toFixed(1)}) pt`);
   };
 
   const handleInsertNewObject = (newObj: EditableObject) => {
@@ -203,6 +251,7 @@ export const App: React.FC = () => {
     setDoc(newDoc);
     setSelectedObjectId(newObj.id);
     setCurrentTool('select');
+    addLog('EDIT', `Inserted new ${newObj.type} object ("${newObj.id}")`);
   };
 
   const handleDeleteObject = (objectId: string) => {
@@ -210,6 +259,7 @@ export const App: React.FC = () => {
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
     setSelectedObjectId(null);
+    addLog('EDIT', `Deleted object "${objectId}"`);
   };
 
   const handleUpdateObject = (updatedProps: Partial<EditableObject>) => {
@@ -225,6 +275,7 @@ export const App: React.FC = () => {
     const cmd = new ChangeStyleCommand(activePageIndex, selectedObjectId, updatedProps as any, oldProps);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+    addLog('EDIT', `Updated properties for "${selectedObjectId}"`, Object.keys(updatedProps));
   };
 
   const handleCommitTableCellEdit = (tableId: string, row: number, col: number, newText: string) => {
@@ -243,12 +294,14 @@ export const App: React.FC = () => {
     );
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+    addLog('EDIT', `Updated table "${tableId}" cell [${row}, ${col}] ➔ "${newText}"`);
   };
 
   const handleSmartPush = (thresholdPdfY: number, deltaHeight: number, excludeId: string) => {
     const cmd = new SmartPushCommand(activePageIndex, thresholdPdfY, deltaHeight, excludeId ? [excludeId] : []);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
+    addLog('EDIT', `Smart-pushed layout below Y=${thresholdPdfY.toFixed(1)}pt by ${deltaHeight}pt`);
   };
 
   const handleReorderObject = (id: string, direction: 'front' | 'back' | 'up' | 'down') => {
@@ -276,6 +329,7 @@ export const App: React.FC = () => {
     const updatedPages = [...doc.pages];
     updatedPages[activePageIndex] = { ...activePage, objects: objs };
     setDoc({ ...doc, pages: updatedPages, isDirty: true });
+    addLog('STATE', `Reordered object "${id}" (${direction})`);
   };
 
   const handleAddPage = () => {
@@ -285,6 +339,7 @@ export const App: React.FC = () => {
       pages: [...doc.pages, newPage],
     });
     setActivePageIndex(doc.pages.length);
+    addLog('STATE', `Added new blank page #${doc.pages.length + 1}`);
   };
 
   const handleDuplicatePage = (pageIdx: number) => {
@@ -299,6 +354,7 @@ export const App: React.FC = () => {
       pages: [...doc.pages, newPage],
     });
     setActivePageIndex(doc.pages.length);
+    addLog('STATE', `Duplicated page #${pageIdx + 1}`);
   };
 
   const handleDeletePage = (pageIdx: number) => {
@@ -309,10 +365,12 @@ export const App: React.FC = () => {
       pages: newPages,
     });
     setActivePageIndex(Math.max(0, pageIdx - 1));
+    addLog('STATE', `Deleted page #${pageIdx + 1}`);
   };
 
   const handleOpenPdf = async (file: File) => {
     setIsLoading(true);
+    addLog('PARSE', `Opening "${file.name}" (${(file.size / 1024).toFixed(1)} KB)...`);
     try {
       const buffer = await file.arrayBuffer();
       const { doc: loadedDoc } = await DocumentModelManager.loadPdfFromBuffer(buffer, file.name);
@@ -323,6 +381,16 @@ export const App: React.FC = () => {
       setSelectedObjectId(null);
       commandManager.clear();
 
+      const totalParsedObjs = loadedDoc.pages.reduce((acc, p) => acc + p.objects.length, 0);
+      addLog(
+        'PARSE',
+        `Successfully parsed "${file.name}" (${loadedDoc.pages.length} pages, ${totalParsedObjs} total objects)`
+      );
+      addLog(
+        'STATE',
+        `Document state: 100% unedited (${totalParsedObjs} objects displaying original PDF drawing instructions)`
+      );
+
       // Auto-run OCR reconciliation if page contains corrupted or exotic characters
       const firstPage = loadedDoc.pages[0];
       const hasExotic = firstPage?.objects.some(
@@ -332,13 +400,15 @@ export const App: React.FC = () => {
       if (firstPage && hasExotic) {
         setIsOcrRunning(true);
         setOcrProgressMsg('Auto-fixing corrupted equation & font symbols with OCR...');
+        addLog('INFO', 'Exotic character patterns detected; launching visual OCR verification...');
         FullPageOcrReconciler.reconcilePage(firstPage, (msg) => setOcrProgressMsg(msg))
-          .then(({ updatedPage }) => {
+          .then(({ updatedPage, stats }) => {
             setDoc((currentDoc) => {
               const updatedPages = [...currentDoc.pages];
               updatedPages[0] = updatedPage;
               return { ...currentDoc, pages: updatedPages };
             });
+            addLog('STATE', `OCR scan completed: Replaced ${stats.replacedCount} corrupted glyphs`);
           })
           .catch((e) => console.warn('Auto-OCR background check warning:', e))
           .finally(() => {
@@ -348,6 +418,7 @@ export const App: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to open PDF:', err);
+      addLog('WARN', `Failed to open PDF: ${err}`);
       alert('Could not parse PDF file. Ensure it is a valid PDF document.');
     } finally {
       setIsLoading(false);
@@ -393,6 +464,10 @@ export const App: React.FC = () => {
 
   const handleExportPdf = () => {
     try {
+      addLog(
+        'STREAM',
+        `Exporting PDF (${editedCount === 0 ? 'Exact original binary stream' : `${editedCount} modified objects serialized`})...`
+      );
       const writer = new PdfWriter();
       const pdfBytes = writer.exportDocument(doc);
 
@@ -405,8 +480,10 @@ export const App: React.FC = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      addLog('STREAM', `Export complete: Downloaded ${a.download}`);
     } catch (err) {
       console.error('PDF Export Error:', err);
+      addLog('WARN', `Export error: ${err}`);
       alert('Error during PDF serialization: ' + err);
     }
   };
@@ -415,6 +492,7 @@ export const App: React.FC = () => {
     if (!activePage || isOcrRunning) return;
     setIsOcrRunning(true);
     setOcrProgressMsg('Initializing Tesseract OCR...');
+    addLog('INFO', `Starting full-page visual OCR scan on Page #${activePageIndex + 1}...`);
     try {
       const { updatedPage, stats } = await FullPageOcrReconciler.reconcilePage(
         activePage,
@@ -423,6 +501,7 @@ export const App: React.FC = () => {
       const updatedPages = [...doc.pages];
       updatedPages[activePageIndex] = updatedPage;
       setDoc({ ...doc, pages: updatedPages });
+      addLog('STATE', `OCR Scan Complete: Replaced ${stats.replacedCount} text blocks`);
       if (stats.replacedCount > 0) {
         alert(`OCR Scan Complete! Fixed and replaced ${stats.replacedCount} mismatched/corrupted text blocks with high-confidence OCR text.`);
       } else {
@@ -430,6 +509,7 @@ export const App: React.FC = () => {
       }
     } catch (err) {
       console.error('OCR Reconciliation Error:', err);
+      addLog('WARN', `OCR Error: ${err}`);
       alert('OCR Reconciliation encountered an issue: ' + err);
     } finally {
       setIsOcrRunning(false);
@@ -445,6 +525,7 @@ export const App: React.FC = () => {
     setActivePageIndex(0);
     setSelectedObjectId(null);
     commandManager.clear();
+    addLog('STATE', 'Created new blank document');
   };
 
   return (
@@ -530,6 +611,14 @@ export const App: React.FC = () => {
           onSelectObject={setSelectedObjectId}
         />
       </div>
+
+      {/* Live PDF Engine Activity & State Console */}
+      <ConsolePanel
+        logs={logs}
+        onClearLogs={() => setLogs([])}
+        editedCount={editedCount}
+        totalObjectsCount={totalObjectsCount}
+      />
 
       {/* Insert Table Modal Dialog */}
       <TableModal

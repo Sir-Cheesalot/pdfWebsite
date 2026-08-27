@@ -383,15 +383,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                         whiteSpace: 'pre-wrap',
                         display: 'flex',
                         alignItems: 'center',
-                        // If modified, use an opaque white background mask covering the old text on the background canvas
+                        // Seamlessly integrate edited text without clunky overlay shadows
                         backgroundColor: shouldShowOpaque && sourcePdf
                           ? '#ffffff'
                           : isSelected && sourcePdf
-                          ? 'rgba(0, 113, 227, 0.08)'
-                          : undefined,
-                        boxShadow: shouldShowOpaque && sourcePdf
-                          ? '0 0 0 2px #ffffff'
-                          : undefined,
+                          ? 'rgba(0, 113, 227, 0.06)'
+                          : 'transparent',
                         borderRadius: isSelected ? '2px' : undefined,
                       }}
                       className="w-full h-full select-none"
