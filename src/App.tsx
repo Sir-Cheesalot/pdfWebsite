@@ -228,6 +228,22 @@ export const App: React.FC = () => {
   };
 
   const handleCommitObjectMove = (objectId: string, dxPdf: number, dyPdf: number) => {
+    const targetObj = activePage?.objects.find((o) => o.id === objectId);
+    if (targetObj && targetObj.type === 'text') {
+      const targetText = targetObj as TextObject;
+      const matchingLine = operatorTextLines.find((line) => {
+        const baselineY = targetText.pdfBounds.y + 0.22 * targetText.fontSize;
+        return (
+          Math.abs(line.y - baselineY) < 3.5 ||
+          (targetText.text.length > 3 && line.text.includes(targetText.text.slice(0, 8)))
+        );
+      });
+      if (matchingLine) {
+        matchingLine.applyEdit(' ');
+        setOperatorTextLines([...operatorTextLines]);
+      }
+    }
+
     const cmd = new MoveObjectCommand(activePageIndex, objectId, dxPdf, dyPdf);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
@@ -251,6 +267,33 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteObject = (objectId: string) => {
+    const targetObj = activePage?.objects.find((o) => o.id === objectId);
+    if (targetObj && targetObj.type === 'text') {
+      const targetText = targetObj as TextObject;
+      const oldText = targetText.text;
+
+      // Clear underlying PDF.js drawing instruction
+      const matchingLine = operatorTextLines.find((line) => {
+        const baselineY = targetText.pdfBounds.y + 0.22 * targetText.fontSize;
+        return (
+          Math.abs(line.y - baselineY) < 3.5 ||
+          (oldText.length > 3 && line.text.includes(oldText.slice(0, 8)))
+        );
+      });
+      if (matchingLine) {
+        matchingLine.applyEdit(' ');
+        setOperatorTextLines([...operatorTextLines]);
+      }
+
+      // Replace text with single space and mark modified so it is masked and removed
+      const cmd = new EditTextCommand(activePageIndex, objectId, ' ', oldText);
+      const newDoc = commandManager.execute(cmd, doc);
+      setDoc(newDoc);
+      setSelectedObjectId(null);
+      addLog('EDIT', `Deleted text object "${objectId}" (replaced with space)`);
+      return;
+    }
+
     const cmd = new DeleteObjectCommand(activePageIndex, objectId);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);

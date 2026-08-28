@@ -159,6 +159,7 @@ export class MoveObjectCommand implements ICommand {
       obj.pdfBounds.y += this.dyPdf;
       obj.matrix[4] += this.dxPdf;
       obj.matrix[5] += this.dyPdf;
+      obj.isModified = true;
     }
     return nextDoc;
   }
