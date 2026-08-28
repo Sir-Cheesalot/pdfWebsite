@@ -468,5 +468,54 @@ describe('10. Robust Line and Paragraph Detection', () => {
     expect(textObjs[0].text).toBe('Main Heading Title');
     expect(textObjs[1].text).toBe('Body paragraph under heading.');
   });
+
+  it('splits lines into separate objects when horizontal gap exceeds 3 spaces (columnar/table layout)', () => {
+    // Two columns on same baseline (Y=700): "Invoice No:" at X=50 and "INV-9821" at X=200 (gap = 100pt > 3 spaces)
+    const stream = `
+      BT
+      /Helvetica 12 Tf
+      1 0 0 1 50 700 Tm
+      (Invoice No:) Tj
+      1 0 0 1 200 700 Tm
+      (INV-9821) Tj
+      ET
+    `;
+    const pageDict = new PdfDict();
+    const { objects } = streamParser.interpretPage(0, pageDict, [
+      { data: new TextEncoder().encode(stream), streamIndex: 0 },
+    ]);
+
+    const textObjs = objects.filter((o) => o.type === 'text') as TextObject[];
+    expect(textObjs.length).toBe(2);
+    expect(textObjs[0].text).toBe('Invoice No:');
+    expect(textObjs[1].text).toBe('INV-9821');
+  });
+
+  it('uses visual shapes (dividing vertical lines / borders) to prevent merging separate columns or cells', () => {
+    // Two text items on same baseline (Y=700) with a vertical line drawn between them at X=100
+    const stream = `
+      1 0 0 RG
+      1 w
+      100 680 m
+      100 720 l
+      S
+      BT
+      /Helvetica 12 Tf
+      1 0 0 1 50 700 Tm
+      (Left Cell) Tj
+      1 0 0 1 105 700 Tm
+      (Right Cell) Tj
+      ET
+    `;
+    const pageDict = new PdfDict();
+    const { objects } = streamParser.interpretPage(0, pageDict, [
+      { data: new TextEncoder().encode(stream), streamIndex: 0 },
+    ]);
+
+    const textObjs = objects.filter((o) => o.type === 'text') as TextObject[];
+    expect(textObjs.length).toBe(2);
+    expect(textObjs[0].text).toBe('Left Cell');
+    expect(textObjs[1].text).toBe('Right Cell');
+  });
 });
 

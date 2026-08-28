@@ -659,6 +659,81 @@ export class ContentStreamParser {
       return a.pdfBounds.x - b.pdfBounds.x; // Left to right
     });
 
+    // Helper: Check if a drawn vector shape (vertical divider, table cell border, or box edge) separates two horizontal text positions
+    const isSeparatedByShape = (
+      lineA: TextObject,
+      lineB: TextObject
+    ): boolean => {
+      const xA = lineA.pdfBounds.x;
+      const xB = lineB.pdfBounds.x;
+      const leftStartX = Math.min(xA, xB);
+      const rightStartX = Math.max(xA, xB);
+
+      const yMin = Math.min(lineA.pdfBounds.y, lineB.pdfBounds.y);
+      const yMax = Math.max(
+        lineA.pdfBounds.y + lineA.pdfBounds.height,
+        lineB.pdfBounds.y + lineB.pdfBounds.height
+      );
+
+      for (const obj of nonTextObjects) {
+        if (obj.type !== 'shape') continue;
+        const s = obj.pdfBounds;
+        // Check vertical overlap with the text
+        const sYMin = s.y;
+        const sYMax = s.y + s.height;
+        const vOverlap = Math.min(yMax, sYMax) - Math.max(yMin, sYMin);
+        if (vOverlap <= 0.5) continue;
+
+        // 1. Vertical dividing line or stroke between the two text starting positions
+        if (s.x > leftStartX && s.x < rightStartX) {
+          return true;
+        }
+        const sRight = s.x + s.width;
+        if (sRight > leftStartX && sRight < rightStartX) {
+          return true;
+        }
+
+        // 2. Container boundary: one text item is inside shape, other is outside
+        const aMidX = lineA.pdfBounds.x + lineA.pdfBounds.width / 2;
+        const aMidY = lineA.pdfBounds.y + lineA.pdfBounds.height / 2;
+        const bMidX = lineB.pdfBounds.x + lineB.pdfBounds.width / 2;
+        const bMidY = lineB.pdfBounds.y + lineB.pdfBounds.height / 2;
+
+        const aInside = aMidX >= s.x && aMidX <= sRight && aMidY >= sYMin && aMidY <= sYMax;
+        const bInside = bMidX >= s.x && bMidX <= sRight && bMidY >= sYMin && bMidY <= sYMax;
+        if (aInside !== bInside) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Helper: Check if a horizontal divider line lies between two vertical baselines
+    const hasHorizontalDivider = (
+      topY: number,
+      bottomY: number,
+      leftX: number,
+      rightX: number
+    ): boolean => {
+      const yLow = Math.min(topY, bottomY);
+      const yHigh = Math.max(topY, bottomY);
+
+      for (const obj of nonTextObjects) {
+        if (obj.type !== 'shape') continue;
+        const s = obj.pdfBounds;
+        // Horizontal line or separator rectangle
+        const sMidY = s.y + s.height / 2;
+        if (sMidY > yLow && sMidY < yHigh) {
+          // Check horizontal overlap with paragraph span
+          const hOverlap = Math.min(rightX, s.x + s.width) - Math.max(leftX, s.x);
+          if (hOverlap > 10 || s.width >= (rightX - leftX) * 0.4) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
     // Step 2: Horizontal Line Consolidation (merge fragments & words on same baseline)
     const lines: TextObject[] = [];
     let currentLine: TextObject | null = null;
@@ -681,11 +756,16 @@ export class ContentStreamParser {
       const currentRight = currentLine.pdfBounds.x + currentLine.pdfBounds.width;
       const distance = textObj.pdfBounds.x - currentRight;
       const avgCharW = (minFs * 0.5) || 6;
-      // Allow realistic word spacing and justified text gaps (up to 1.4 * fontSize or 16pt)
-      const maxSpaceGap = Math.max(14, 1.4 * minFs);
+
+      // 3-space gap rule: in standard typography, a space is ~0.28*fontSize.
+      // 3 spaces is ~0.84*fontSize (capped at 10-12pt). Gaps larger than this are separate columns/fields!
+      const maxSpaceGap = Math.min(10.5, 0.85 * minFs);
       const isAdjacent = distance >= -avgCharW * 0.45 && distance <= maxSpaceGap;
 
-      if (sameBaseline && sameFont && sameFontSize && sameColor && isAdjacent) {
+      // Visual context: ensure no drawn shape or container boundary separates the two fragments
+      const isBlockedByShape = isSeparatedByShape(currentLine, textObj);
+
+      if (sameBaseline && sameFont && sameFontSize && sameColor && isAdjacent && !isBlockedByShape) {
         // Determine whether a space separator is needed between adjacent words/fragments
         const needsSpace = distance >= (minFs * 0.16) &&
           !currentLine.text.endsWith(' ') &&
@@ -756,7 +836,7 @@ export class ContentStreamParser {
       const isNaturalPitch = linePitch >= (0.85 * fs) && linePitch <= (1.85 * fs);
 
       // Alignment / Margins check:
-      // Paragraph lines have matching left margins (within 12pt) or first line indent (up to 28pt)
+      // Paragraph lines have matching left margins (within 14pt) or first line indent (up to 28pt)
       const leftDiff = Math.abs(currentPara.pdfBounds.x - line.pdfBounds.x);
       const isAlignedLeft = leftDiff <= 14 || (currentPara.text.indexOf('\n') === -1 && leftDiff <= 28);
 
@@ -764,12 +844,18 @@ export class ContentStreamParser {
       const isBullet = /^[\u2022\u2023\u25E6\u2043\u2219\*\-\–\—\d+\.\)]/.test(line.text.trim());
       const isHeading = line.fontSize >= (currentPara.fontSize + 2) || (line.bold && !currentPara.bold);
 
+      // Visual context: check if a horizontal dividing line or shape lies between the two lines
+      const paraMinX = Math.min(currentPara.pdfBounds.x, line.pdfBounds.x);
+      const paraMaxX = Math.max(
+        currentPara.pdfBounds.x + currentPara.pdfBounds.width,
+        line.pdfBounds.x + line.pdfBounds.width
+      );
+      const isDividedByShape = hasHorizontalDivider(lastLineBottomY, line.pdfBounds.y, paraMinX, paraMaxX);
+
       // Previous line end-of-paragraph indicators
-      const prevTrimmed = currentPara.text.trim();
-      const prevEndsSentence = prevTrimmed.endsWith('.') || prevTrimmed.endsWith(':') || prevTrimmed.endsWith('!') || prevTrimmed.endsWith('?');
       const isWideGap = linePitch > (1.85 * fs);
 
-      if (sameFont && sameFontSize && sameColor && isNaturalPitch && isAlignedLeft && !isBullet && !isHeading && !isWideGap) {
+      if (sameFont && sameFontSize && sameColor && isNaturalPitch && isAlignedLeft && !isBullet && !isHeading && !isWideGap && !isDividedByShape) {
         // Append line to current paragraph
         currentPara.text += '\n' + line.text;
         currentPara.runs.push(...line.runs);
