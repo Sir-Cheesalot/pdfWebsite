@@ -346,24 +346,41 @@ export class ContentStreamReconstructor {
       }
     }
 
-    if (!fontKey) {
-      // 2. Fallback: dynamically match Standard 14 PDF fonts based on original font name & style
-      fontKey = this.getBestStandardFont(textObj.fontName, textObj.bold || false, textObj.italic || false);
-      textOp = `${this.encodeWinAnsi(textObj.text)} Tj`;
+    const hasNewlines = textObj.text.includes('\n');
+    const leading = textObj.lineHeight || (textObj.fontSize * 1.2);
+
+    if (!fontKey || hasNewlines) {
+      // Fallback or Multiline: dynamically match Standard 14 PDF fonts and handle multi-line paragraph stepping
+      if (!fontKey) {
+        fontKey = this.getBestStandardFont(textObj.fontName, textObj.bold || false, textObj.italic || false);
+      }
+      if (hasNewlines) {
+        const textLines = textObj.text.split('\n');
+        const textOps: string[] = [];
+        for (let i = 0; i < textLines.length; i++) {
+          const lineStr = textLines[i];
+          if (i === 0) {
+            textOps.push(`${this.encodeWinAnsi(lineStr)} Tj`);
+          } else {
+            textOps.push(`T* ${this.encodeWinAnsi(lineStr)} Tj`);
+          }
+        }
+        textOp = textOps.join('\n');
+      } else {
+        textOp = `${this.encodeWinAnsi(textObj.text)} Tj`;
+      }
     }
 
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
 
-    // Character spacing & leading
+    // Character spacing, word spacing & leading
     if (textObj.charSpacing !== 0) {
       lines.push(`${textObj.charSpacing.toFixed(2)} Tc`);
     }
     if (textObj.wordSpacing) {
       lines.push(`${textObj.wordSpacing.toFixed(2)} Tw`);
     }
-    if (textObj.lineHeight) {
-      lines.push(`${textObj.lineHeight.toFixed(2)} TL`);
-    }
+    lines.push(`${leading.toFixed(2)} TL`);
 
     // The stored textObj.matrix = textMatrix × CTM (absolute combined matrix from parsing).
     // To emit the correct Tm inside the current CTM context:

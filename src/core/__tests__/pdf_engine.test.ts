@@ -391,3 +391,82 @@ describe('9. OCR Verification & Exotic Character Resolution Engine', () => {
     expect(res.verifiedText).toContain('(Δx) represents the maximum compression distance');
   });
 });
+
+describe('10. Robust Line and Paragraph Detection', () => {
+  const fontEngine = new FontEngine();
+  const parser = new PdfParser(new Uint8Array());
+  const streamParser = new ContentStreamParser(parser, fontEngine);
+
+  it('consolidates words and fragments on the same line into a single cohesive line object', () => {
+    // 3 words on the same baseline (Y=700) with gaps
+    const stream = `
+      BT
+      /Helvetica 12 Tf
+      1 0 0 1 50 700 Tm
+      (The ) Tj
+      1 0 0 1 80 700 Tm
+      (quick ) Tj
+      1 0 0 1 120 700 Tm
+      (brown fox) Tj
+      ET
+    `;
+    const pageDict = new PdfDict();
+    const { objects } = streamParser.interpretPage(0, pageDict, [
+      { data: new TextEncoder().encode(stream), streamIndex: 0 },
+    ]);
+
+    const textObjs = objects.filter((o) => o.type === 'text') as TextObject[];
+    expect(textObjs.length).toBe(1);
+    expect(textObjs[0].text).toBe('The quick brown fox');
+  });
+
+  it('consolidates multi-line paragraphs with consistent vertical line pitch into single paragraph block', () => {
+    // 3 lines belonging to the same paragraph with 14pt leading (Y=700, 686, 672)
+    const stream = `
+      BT
+      /Helvetica 12 Tf
+      1 0 0 1 50 700 Tm
+      (Paragraph line one discussing modern architecture) Tj
+      1 0 0 1 50 686 Tm
+      (and the structural principles behind PDF streams) Tj
+      1 0 0 1 50 672 Tm
+      (which allows clean inline editing and parsing.) Tj
+      ET
+    `;
+    const pageDict = new PdfDict();
+    const { objects } = streamParser.interpretPage(0, pageDict, [
+      { data: new TextEncoder().encode(stream), streamIndex: 0 },
+    ]);
+
+    const textObjs = objects.filter((o) => o.type === 'text') as TextObject[];
+    expect(textObjs.length).toBe(1);
+    expect(textObjs[0].text).toContain('Paragraph line one');
+    expect(textObjs[0].text).toContain('\nand the structural principles');
+    expect(textObjs[0].text).toContain('\nwhich allows clean inline editing');
+  });
+
+  it('keeps distinct paragraphs or headers separated when vertical gap or styling changes', () => {
+    const stream = `
+      BT
+      /Helvetica 18 Tf
+      1 0 0 1 50 750 Tm
+      (Main Heading Title) Tj
+      ET
+      BT
+      /Helvetica 12 Tf
+      1 0 0 1 50 680 Tm
+      (Body paragraph under heading.) Tj
+      ET
+    `;
+    const pageDict = new PdfDict();
+    const { objects } = streamParser.interpretPage(0, pageDict, [
+      { data: new TextEncoder().encode(stream), streamIndex: 0 },
+    ]);
+
+    const textObjs = objects.filter((o) => o.type === 'text') as TextObject[];
+    expect(textObjs.length).toBe(2);
+    expect(textObjs[0].text).toBe('Main Heading Title');
+    expect(textObjs[1].text).toBe('Body paragraph under heading.');
+  });
+});
+

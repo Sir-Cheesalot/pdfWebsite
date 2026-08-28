@@ -21,6 +21,7 @@ import {
   TextRun,
 } from '../types/model';
 import { CoordinateSystem } from '../coords/CoordinateSystem';
+import { FontFamilyHelper } from '../fonts/FontFamilyHelper';
 import { FontEngine } from './FontEngine';
 import { PdfLexer } from './PdfLexer';
 import { PdfParser } from './PdfParser';
@@ -630,7 +631,7 @@ export class ContentStreamParser {
   }
 
   /**
-   * Consolidates atomic text runs and fragments into clean line and paragraph blocks
+   * Consolidates atomic text runs and fragments into clean, natural line and paragraph blocks
    */
   private consolidateTextObjects(rawObjects: EditableObject[], pageIndex: number): EditableObject[] {
     const nonTextObjects: EditableObject[] = [];
@@ -648,15 +649,17 @@ export class ContentStreamParser {
       return rawObjects;
     }
 
-    // 1. Group text objects by line (similar baseline Y within 3pt / 0.3*fontSize)
+    // Step 1: Baseline sorting (top-of-page to bottom, left-to-right)
     textObjects.sort((a, b) => {
       const dy = b.pdfBounds.y - a.pdfBounds.y;
-      if (Math.abs(dy) > Math.min(3, 0.25 * a.fontSize)) {
+      const minFs = Math.min(a.fontSize || 12, b.fontSize || 12);
+      if (Math.abs(dy) > Math.max(2.5, 0.28 * minFs)) {
         return dy; // Higher PDF Y first (top of page to bottom)
       }
       return a.pdfBounds.x - b.pdfBounds.x; // Left to right
     });
 
+    // Step 2: Horizontal Line Consolidation (merge fragments & words on same baseline)
     const lines: TextObject[] = [];
     let currentLine: TextObject | null = null;
 
@@ -666,19 +669,38 @@ export class ContentStreamParser {
         continue;
       }
 
-      const sameBaseline = Math.abs(currentLine.pdfBounds.y - textObj.pdfBounds.y) <= Math.min(2, 0.2 * currentLine.fontSize);
-      const sameFont = currentLine.fontName === textObj.fontName;
-      const sameFontSize = Math.abs(currentLine.fontSize - textObj.fontSize) <= 1.0;
-      const sameColor = currentLine.fillColor === textObj.fillColor;
+      const minFs = Math.min(currentLine.fontSize || 12, textObj.fontSize || 12);
+      const sameBaseline = Math.abs(currentLine.pdfBounds.y - textObj.pdfBounds.y) <= Math.max(2.5, 0.28 * minFs);
+      
+      const fontA = FontFamilyHelper.getCleanFontName(currentLine.fontName);
+      const fontB = FontFamilyHelper.getCleanFontName(textObj.fontName);
+      const sameFont = fontA === fontB || currentLine.fontName === textObj.fontName;
+      const sameFontSize = Math.abs(currentLine.fontSize - textObj.fontSize) <= 1.5;
+      const sameColor = !currentLine.fillColor || !textObj.fillColor || currentLine.fillColor === textObj.fillColor;
 
       const currentRight = currentLine.pdfBounds.x + currentLine.pdfBounds.width;
       const distance = textObj.pdfBounds.x - currentRight;
-      const avgCharW = (currentLine.fontSize * 0.5) || 6;
-      const maxSpaceGap = Math.min(6, 0.5 * currentLine.fontSize);
-      const isAdjacent = distance >= -avgCharW * 0.4 && distance <= maxSpaceGap;
+      const avgCharW = (minFs * 0.5) || 6;
+      // Allow realistic word spacing and justified text gaps (up to 1.4 * fontSize or 16pt)
+      const maxSpaceGap = Math.max(14, 1.4 * minFs);
+      const isAdjacent = distance >= -avgCharW * 0.45 && distance <= maxSpaceGap;
 
       if (sameBaseline && sameFont && sameFontSize && sameColor && isAdjacent) {
-        if (distance > 2 && !currentLine.text.endsWith(' ') && !textObj.text.startsWith(' ')) {
+        // Determine whether a space separator is needed between adjacent words/fragments
+        const needsSpace = distance >= (minFs * 0.16) &&
+          !currentLine.text.endsWith(' ') &&
+          !textObj.text.startsWith(' ') &&
+          !currentLine.text.endsWith('-') &&
+          !textObj.text.startsWith(',') &&
+          !textObj.text.startsWith('.') &&
+          !textObj.text.startsWith(';') &&
+          !textObj.text.startsWith(':') &&
+          !textObj.text.startsWith('!') &&
+          !textObj.text.startsWith('?') &&
+          !textObj.text.startsWith(')') &&
+          !textObj.text.startsWith(']');
+
+        if (needsSpace) {
           currentLine.text += ' ';
         }
         currentLine.text += textObj.text;
@@ -689,6 +711,10 @@ export class ContentStreamParser {
         currentLine.pdfBounds.height = Math.max(currentLine.pdfBounds.height, textObj.pdfBounds.height);
 
         if (currentLine.sourcePdfRef && textObj.sourcePdfRef) {
+          currentLine.sourcePdfRef.startOpIndex = Math.min(
+            currentLine.sourcePdfRef.startOpIndex,
+            textObj.sourcePdfRef.startOpIndex
+          );
           currentLine.sourcePdfRef.endOpIndex = Math.max(
             currentLine.sourcePdfRef.endOpIndex,
             textObj.sourcePdfRef.endOpIndex
@@ -703,8 +729,86 @@ export class ContentStreamParser {
       lines.push(currentLine);
     }
 
-    // Return discrete horizontal line objects (no downward vertical merging)
-    const result: EditableObject[] = [...nonTextObjects, ...lines];
+    // Step 3: Paragraph Detection & Block Consolidation
+    // Group consecutive lines that form coherent body paragraphs
+    const paragraphs: TextObject[] = [];
+    let currentPara: TextObject | null = null;
+    let lastLineBottomY = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (!currentPara) {
+        currentPara = { ...line, runs: [...line.runs] };
+        lastLineBottomY = line.pdfBounds.y;
+        continue;
+      }
+
+      const fontA = FontFamilyHelper.getCleanFontName(currentPara.fontName);
+      const fontB = FontFamilyHelper.getCleanFontName(line.fontName);
+      const sameFont = fontA === fontB || currentPara.fontName === line.fontName;
+      const sameFontSize = Math.abs(currentPara.fontSize - line.fontSize) <= 0.8;
+      const sameColor = currentPara.fillColor === line.fillColor;
+      
+      // Vertical pitch (distance from previous line baseline to this line baseline)
+      const linePitch = lastLineBottomY - line.pdfBounds.y;
+      const fs = currentPara.fontSize || 12;
+      const isNaturalPitch = linePitch >= (0.85 * fs) && linePitch <= (1.85 * fs);
+
+      // Alignment / Margins check:
+      // Paragraph lines have matching left margins (within 12pt) or first line indent (up to 28pt)
+      const leftDiff = Math.abs(currentPara.pdfBounds.x - line.pdfBounds.x);
+      const isAlignedLeft = leftDiff <= 14 || (currentPara.text.indexOf('\n') === -1 && leftDiff <= 28);
+
+      // Not a list bullet or header delimiter
+      const isBullet = /^[\u2022\u2023\u25E6\u2043\u2219\*\-\–\—\d+\.\)]/.test(line.text.trim());
+      const isHeading = line.fontSize >= (currentPara.fontSize + 2) || (line.bold && !currentPara.bold);
+
+      // Previous line end-of-paragraph indicators
+      const prevTrimmed = currentPara.text.trim();
+      const prevEndsSentence = prevTrimmed.endsWith('.') || prevTrimmed.endsWith(':') || prevTrimmed.endsWith('!') || prevTrimmed.endsWith('?');
+      const isWideGap = linePitch > (1.85 * fs);
+
+      if (sameFont && sameFontSize && sameColor && isNaturalPitch && isAlignedLeft && !isBullet && !isHeading && !isWideGap) {
+        // Append line to current paragraph
+        currentPara.text += '\n' + line.text;
+        currentPara.runs.push(...line.runs);
+
+        const newMinX = Math.min(currentPara.pdfBounds.x, line.pdfBounds.x);
+        const newMaxX = Math.max(currentPara.pdfBounds.x + currentPara.pdfBounds.width, line.pdfBounds.x + line.pdfBounds.width);
+        const newMinY = Math.min(currentPara.pdfBounds.y, line.pdfBounds.y);
+        const newMaxY = Math.max(currentPara.pdfBounds.y + currentPara.pdfBounds.height, line.pdfBounds.y + line.pdfBounds.height);
+
+        currentPara.pdfBounds.x = newMinX;
+        currentPara.pdfBounds.y = newMinY;
+        currentPara.pdfBounds.width = newMaxX - newMinX;
+        currentPara.pdfBounds.height = newMaxY - newMinY;
+        currentPara.lineHeight = linePitch > 0 ? linePitch : (fs * 1.2);
+
+        if (currentPara.sourcePdfRef && line.sourcePdfRef) {
+          currentPara.sourcePdfRef.startOpIndex = Math.min(
+            currentPara.sourcePdfRef.startOpIndex,
+            line.sourcePdfRef.startOpIndex
+          );
+          currentPara.sourcePdfRef.endOpIndex = Math.max(
+            currentPara.sourcePdfRef.endOpIndex,
+            line.sourcePdfRef.endOpIndex
+          );
+        }
+
+        lastLineBottomY = line.pdfBounds.y;
+      } else {
+        paragraphs.push(currentPara);
+        currentPara = { ...line, runs: [...line.runs] };
+        lastLineBottomY = line.pdfBounds.y;
+      }
+    }
+
+    if (currentPara) {
+      paragraphs.push(currentPara);
+    }
+
+    const result: EditableObject[] = [...nonTextObjects, ...paragraphs];
     result.forEach((obj, idx) => {
       obj.zIndex = idx + 1;
     });
@@ -826,12 +930,14 @@ export class ContentStreamParser {
   private getInheritedAttribute(pageDict: PdfDict, key: string): PdfObject | undefined {
     let current: PdfDict | null = pageDict;
     while (current) {
-      const val = this.parser.resolve(current.get(key));
+      const rawVal: PdfObject | undefined = current.get(key);
+      const val: PdfObject | undefined = this.parser ? this.parser.resolve(rawVal) : rawVal;
       if (val !== undefined && val !== null) {
         return val;
       }
-      const parent = this.parser.resolve(current.get('Parent'));
-      current = parent instanceof PdfDict ? parent : null;
+      const rawParent: PdfObject | undefined = current.get('Parent');
+      const resolvedParent: PdfObject | undefined = this.parser ? this.parser.resolve(rawParent) : rawParent;
+      current = resolvedParent instanceof PdfDict ? resolvedParent : null;
     }
     return undefined;
   }

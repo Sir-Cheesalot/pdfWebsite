@@ -380,8 +380,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                         color: (obj as TextObject).fillColor || '#1d1d1f',
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
-                        letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
-                        lineHeight: 1.15,
+                        lineHeight: (obj as TextObject).lineHeight && (obj as TextObject).fontSize
+                          ? `${((obj as TextObject).lineHeight / (obj as TextObject).fontSize).toFixed(2)}`
+                          : '1.2',
                         textAlign: (obj as TextObject).alignment || 'left',
                       }}
                       className="w-full h-full bg-white text-[#1d1d1f] border border-[#0071e3] rounded px-1 py-0.5 resize-none focus:outline-none shadow-md z-50 ring-2 ring-[#0071e3]/20"
@@ -397,7 +398,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         textDecoration: (obj as TextObject).underline ? 'underline' : 'none',
                         letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
-                        lineHeight: 1.1,
+                        lineHeight: (obj as TextObject).lineHeight && (obj as TextObject).fontSize
+                          ? `${((obj as TextObject).lineHeight / (obj as TextObject).fontSize).toFixed(2)}`
+                          : '1.2',
                         textAlign: (obj as TextObject).alignment || 'left',
                         whiteSpace: 'pre',
                         overflow: 'visible',
