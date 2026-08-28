@@ -443,18 +443,17 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
 
-              {/* Image Object Rendering */}
-              {obj.type === 'image' && (obj as ImageObject).src && (
+              {/* Image Object Rendering (Only render if user-created or no sourcePdf) */}
+              {obj.type === 'image' && (!sourcePdf || obj.origin === 'user_created') && (
                 <img
                   src={(obj as ImageObject).src}
                   alt="PDF Image"
-                  className="w-full h-full object-fill pointer-events-none select-none"
-                  draggable={false}
+                  className="w-full h-full object-fill pointer-events-none"
                 />
               )}
 
-              {/* Shape Object Rendering */}
-              {obj.type === 'shape' && (
+              {/* Shape Object Rendering (Only render if user-created or no sourcePdf) */}
+              {obj.type === 'shape' && (!sourcePdf || obj.origin === 'user_created') && (
                 <svg className="w-full h-full overflow-visible pointer-events-none">
                   {(obj as ShapeObject).shapeType === 'rect' && (
                     <rect
