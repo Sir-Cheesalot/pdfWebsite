@@ -29,8 +29,6 @@ import { Canvas } from './components/Canvas';
 import { Inspector } from './components/Inspector';
 import { TableModal } from './components/TableModal';
 import { ConsolePanel, LogEntry } from './components/ConsolePanel';
-import { FullPageOcrReconciler } from './core/ocr/FullPageOcrReconciler';
-import { OcrVerificationEngine } from './core/ocr/OcrVerificationEngine';
 import { Loader2, Upload } from 'lucide-react';
 import { inspectPdfOperatorText, OperatorTextLine } from './core/pdf/PdfJsOperatorInspector';
 
@@ -43,8 +41,6 @@ export const App: React.FC = () => {
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const [isOcrRunning, setIsOcrRunning] = useState(false);
-  const [ocrProgressMsg, setOcrProgressMsg] = useState('');
   const [operatorTextLines, setOperatorTextLines] = useState<OperatorTextLine[]>([]);
   const [currentSourcePdf, setCurrentSourcePdf] = useState<ArrayBuffer | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([
@@ -477,35 +473,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleRunFullPageOcr = async () => {
-    if (!activePage || isOcrRunning) return;
-    setIsOcrRunning(true);
-    setOcrProgressMsg('Initializing Tesseract OCR...');
-    addLog('INFO', `Starting full-page visual OCR scan on Page #${activePageIndex + 1}...`);
-    try {
-      const { updatedPage, stats } = await FullPageOcrReconciler.reconcilePage(
-        activePage,
-        (msg) => setOcrProgressMsg(msg)
-      );
-      const updatedPages = [...doc.pages];
-      updatedPages[activePageIndex] = updatedPage;
-      setDoc({ ...doc, pages: updatedPages });
-      addLog('STATE', `OCR Scan Complete: Replaced ${stats.replacedCount} text blocks`);
-      if (stats.replacedCount > 0) {
-        alert(`OCR Scan Complete! Fixed and replaced ${stats.replacedCount} mismatched/corrupted text blocks with high-confidence OCR text.`);
-      } else {
-        alert('OCR Scan Complete! All text objects accurately match OCR recognition.');
-      }
-    } catch (err) {
-      console.error('OCR Reconciliation Error:', err);
-      addLog('WARN', `OCR Error: ${err}`);
-      alert('OCR Reconciliation encountered an issue: ' + err);
-    } finally {
-      setIsOcrRunning(false);
-      setOcrProgressMsg('');
-    }
-  };
-
   const handleNewDocument = () => {
     const newDoc = DocumentModelManager.createBlankDocument('Untitled Document.pdf', 1);
     pdfSourceRef.current = null;
@@ -537,17 +504,7 @@ export const App: React.FC = () => {
         onInsertImageFile={handleInsertImageFile}
         onOpenTableModal={() => setIsTableModalOpen(true)}
         isLoading={isLoading}
-        onRunFullPageOcr={handleRunFullPageOcr}
-        isOcrRunning={isOcrRunning}
       />
-
-      {/* OCR Progress Toast */}
-      {isOcrRunning && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-white/95 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-[#0071e3]/30 flex items-center space-x-2 text-xs font-medium text-[#1d1d1f]">
-          <Loader2 className="w-4 h-4 animate-spin text-[#0071e3]" />
-          <span>{ocrProgressMsg || 'Scanning with Tesseract OCR...'}</span>
-        </div>
-      )}
 
       {/* Main Workspace Area */}
       <div className="flex-1 flex overflow-hidden relative">

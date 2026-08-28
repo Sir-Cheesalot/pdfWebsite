@@ -8,6 +8,7 @@ export interface RepositionResult {
     newPdfY: number;
     oldMatrixY: number;
     newMatrixY: number;
+    wasModified?: boolean;
   }[];
   deltaHeight: number;
   thresholdY: number;
@@ -42,21 +43,27 @@ export class SmartLayoutEngine {
       if (excludeIds.has(obj.id)) continue;
 
       // Check if this object is located below the insertion point in visual page coordinates
-      // (meaning obj.pdfBounds.y < insertionThresholdPdfY)
+      // (meaning obj.pdfBounds.y < insertionThresholdPdfY or obj top <= threshold)
       const objTopPdfY = obj.pdfBounds.y + obj.pdfBounds.height;
       if (objTopPdfY <= insertionThresholdPdfY || obj.pdfBounds.y < insertionThresholdPdfY) {
         const oldPdfY = obj.pdfBounds.y;
         const newPdfY = Math.max(0, oldPdfY - deltaHeight);
         const oldMatrixY = obj.matrix[5];
         const newMatrixY = oldMatrixY - deltaHeight;
+        const wasModified = !!obj.isModified;
 
         // Apply shift directly to internal object model
         obj.pdfBounds.y = newPdfY;
         obj.matrix[5] = newMatrixY;
+        obj.isModified = true;
 
-        // If table, shift inner cells
-        if (obj.type === 'table') {
-          // Table bounding box shifted, cells render relative to table bounds
+        // If text, shift individual text runs in sync
+        if (obj.type === 'text' && (obj as any).runs) {
+          for (const run of (obj as any).runs) {
+            if (typeof run.y === 'number') {
+              run.y -= deltaHeight;
+            }
+          }
         }
 
         result.modifiedObjects.push({
@@ -65,6 +72,7 @@ export class SmartLayoutEngine {
           newPdfY,
           oldMatrixY,
           newMatrixY,
+          wasModified,
         });
       }
     }
@@ -82,6 +90,16 @@ export class SmartLayoutEngine {
       if (record) {
         obj.pdfBounds.y = record.oldPdfY;
         obj.matrix[5] = record.oldMatrixY;
+        obj.isModified = record.wasModified ?? false;
+
+        if (obj.type === 'text' && (obj as any).runs) {
+          const delta = record.newPdfY - record.oldPdfY;
+          for (const run of (obj as any).runs) {
+            if (typeof run.y === 'number') {
+              run.y -= delta;
+            }
+          }
+        }
       }
     }
   }

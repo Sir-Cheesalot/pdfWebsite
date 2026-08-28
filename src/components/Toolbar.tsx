@@ -6,10 +6,8 @@ import {
   Download,
   FolderOpen,
   Image as ImageIcon,
-  Loader2,
   MousePointer,
   Redo2,
-  ScanText,
   Square,
   Table as TableIcon,
   Type,
@@ -40,8 +38,6 @@ interface ToolbarProps {
   onOpenTableModal: () => void;
   onNewDocument?: () => void;
   isLoading?: boolean;
-  onRunFullPageOcr?: () => void;
-  isOcrRunning?: boolean;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -60,8 +56,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onInsertImageFile,
   onOpenTableModal,
   isLoading,
-  onRunFullPageOcr,
-  isOcrRunning,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -220,22 +214,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <ArrowDownNarrowWide className="w-3.5 h-3.5" />
           <span>Smart Push</span>
         </button>
-
-        {onRunFullPageOcr && (
-          <button
-            onClick={onRunFullPageOcr}
-            disabled={isOcrRunning}
-            className="flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-medium text-[#0071e3] hover:bg-white/80 transition-all border border-[#0071e3]/20 disabled:opacity-50"
-            title="Scan entire page with Tesseract OCR & fix corrupted text"
-          >
-            {isOcrRunning ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#0071e3]" />
-            ) : (
-              <ScanText className="w-3.5 h-3.5 text-[#0071e3]" />
-            )}
-            <span>{isOcrRunning ? 'Scanning OCR...' : 'OCR Fix Page'}</span>
-          </button>
-        )}
       </div>
 
       {/* Right section: Zoom, Page Navigation & Clean Apple Blue Export */}

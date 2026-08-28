@@ -163,6 +163,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (obj.locked || editingTextId === obj.id) return;
     e.stopPropagation();
 
+    if (currentTool === 'smart_push') {
+      onSmartPush(obj.pdfBounds.y, 40, obj.id);
+      return;
+    }
+
     onSelectObject(obj.id);
 
     // If in text tool, single-click enters inline edit mode immediately
