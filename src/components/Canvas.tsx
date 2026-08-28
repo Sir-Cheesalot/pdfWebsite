@@ -22,7 +22,7 @@ interface CanvasProps {
   currentTool: ToolMode;
   onSelectObject: (id: string | null) => void;
   onUpdateObject: (updated: Partial<EditableObject>) => void;
-  onCommitObjectMove: (objectId: string, dxPdf: number, dyPdf: number) => void;
+  onCommitObjectMove: (objectId: string, dxPdf: number, dyPdf: number, initialBounds?: Rect) => void;
   onCommitObjectResize: (objectId: string, newBounds: Rect, oldBounds: Rect) => void;
   onCommitTextEdit: (objectId: string, newText: string, oldText: string) => void;
   onCommitTableCellEdit: (tableId: string, row: number, col: number, newText: string) => void;
@@ -273,7 +273,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           const dxPdf = selectedObject.pdfBounds.x - activeDrag.initialBounds.x;
           const dyPdf = selectedObject.pdfBounds.y - activeDrag.initialBounds.y;
           if (Math.abs(dxPdf) > 0.1 || Math.abs(dyPdf) > 0.1) {
-            onCommitObjectMove(selectedObject.id, dxPdf, dyPdf);
+            onCommitObjectMove(selectedObject.id, dxPdf, dyPdf, activeDrag.initialBounds);
           }
         } else if (activeDrag.type === 'resize') {
           onCommitObjectResize(selectedObject.id, selectedObject.pdfBounds, activeDrag.initialBounds);

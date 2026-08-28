@@ -227,15 +227,18 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCommitObjectMove = (objectId: string, dxPdf: number, dyPdf: number) => {
+  const handleCommitObjectMove = (objectId: string, dxPdf: number, dyPdf: number, initialBounds?: Rect) => {
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
     if (targetObj && targetObj.type === 'text') {
       const targetText = targetObj as TextObject;
+      const originalY = initialBounds ? initialBounds.y : (targetText.pdfBounds.y - dyPdf);
+      const originalBaselineY = originalY + 0.22 * targetText.fontSize;
+      const originalText = targetText.text;
+
       const matchingLine = operatorTextLines.find((line) => {
-        const baselineY = targetText.pdfBounds.y + 0.22 * targetText.fontSize;
         return (
-          Math.abs(line.y - baselineY) < 3.5 ||
-          (targetText.text.length > 3 && line.text.includes(targetText.text.slice(0, 8)))
+          Math.abs(line.y - originalBaselineY) < 4.5 ||
+          (originalText.length > 2 && line.text.includes(originalText.trim().slice(0, 8)))
         );
       });
       if (matchingLine) {
