@@ -912,17 +912,27 @@ export class ContentStreamParser {
     streamIndex: number,
     opIdx: number
   ): ImageObject | null {
-    const width = Number(xobj.dict.get('Width') || 100);
-    const height = Number(xobj.dict.get('Height') || 100);
-    const filter = xobj.dict.get('Filter');
+    const resolveObj = (val: any) => (this.parser && val instanceof PdfRef ? this.parser.resolve(val) : val);
+
+    const widthVal = resolveObj(xobj.dict.get('Width'));
+    const heightVal = resolveObj(xobj.dict.get('Height'));
+    const filterVal = resolveObj(xobj.dict.get('Filter'));
+    const colorSpaceVal = resolveObj(xobj.dict.get('ColorSpace'));
+    const bpcVal = resolveObj(xobj.dict.get('BitsPerComponent'));
+    const isImageMaskVal = resolveObj(xobj.dict.get('ImageMask'));
+    const decodeArrVal = resolveObj(xobj.dict.get('Decode'));
+
+    const width = Number(widthVal || 100) || 100;
+    const height = Number(heightVal || 100) || 100;
     
     let isJpeg = false;
-    if (filter instanceof PdfName) {
-      const v = filter.value;
+    if (filterVal instanceof PdfName) {
+      const v = filterVal.value;
       isJpeg = v === 'DCTDecode' || v === 'DCT' || v === 'JPXDecode';
-    } else if (Array.isArray(filter)) {
-      isJpeg = filter.some((f) => {
-        const v = f instanceof PdfName ? f.value : String(f).replace(/^\//, '');
+    } else if (Array.isArray(filterVal)) {
+      isJpeg = filterVal.some((f) => {
+        const resolvedF = resolveObj(f);
+        const v = resolvedF instanceof PdfName ? resolvedF.value : String(resolvedF).replace(/^\//, '');
         return v === 'DCTDecode' || v === 'DCT' || v === 'JPXDecode';
       });
     }
@@ -930,16 +940,14 @@ export class ContentStreamParser {
     let mimeType = isJpeg ? 'image/jpeg' : 'image/png';
     let dataUrl = '';
 
-    if (isJpeg) {
+    if (isJpeg && xobj.data && xobj.data.length > 4) {
       dataUrl = `data:image/jpeg;base64,${this.uint8ToBase64(xobj.data)}`;
     } else {
       const raw = xobj.decodedData || FlateDecoder.decodeStream(xobj);
-      const colorSpace = xobj.dict.get('ColorSpace');
-      const bpc = Number(xobj.dict.get('BitsPerComponent') || 8);
-      const isImageMask = xobj.dict.get('ImageMask') === true;
-      const decodeArr = xobj.dict.get('Decode');
+      const bpc = Number(bpcVal || 8) || 8;
+      const isImageMask = isImageMaskVal === true;
 
-      dataUrl = this.rawRgbToDataUrl(raw, width, height, colorSpace, bpc, isImageMask, decodeArr);
+      dataUrl = this.rawRgbToDataUrl(raw, width, height, colorSpaceVal, bpc, isImageMask, decodeArrVal);
     }
 
     // PDF image dimension in user units is determined by CTM:
@@ -978,12 +986,22 @@ export class ContentStreamParser {
   }
 
   private uint8ToBase64(bytes: Uint8Array): string {
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    if (!bytes || bytes.length === 0) return '';
+    try {
+      let binary = '';
+      const chunkSize = 8192;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+        binary += String.fromCharCode.apply(null, chunk as any);
+      }
+      return btoa(binary);
+    } catch {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
     }
-    return btoa(binary);
   }
 
   private rawRgbToDataUrl(
