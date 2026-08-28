@@ -63,6 +63,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     initialBounds: Rect;
     initialScreenBounds: Rect;
   } | null>(null);
+  const [dragOffset, setDragOffset] = useState<{ dxScreen: number; dyScreen: number; newBounds?: Rect } | null>(null);
 
   const selectedObject = page.objects.find((o) => o.id === selectedObjectId) || null;
 
@@ -165,31 +166,40 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent, obj: EditableObject, handle?: ResizeHandle) => {
+    if (e.button !== 0) return; // only left click
     if (obj.locked || editingTextId === obj.id) return;
+
     e.stopPropagation();
+    onSelectObject(obj.id);
+
+    if (obj.type === 'text' && editingTextId === obj.id) {
+      return;
+    }
+
+    if (editingTextId && editingTextId !== obj.id) {
+      setEditingTextId(null);
+    }
+
+    if (currentTool === 'text' && obj.type === 'text') {
+      setEditingTextId(obj.id);
+      return;
+    }
 
     if (currentTool === 'smart_push') {
       onSmartPush(obj.pdfBounds.y, 40, obj.id);
       return;
     }
 
-    onSelectObject(obj.id);
-
-    // If in text tool, single-click enters inline edit mode immediately
-    if (currentTool === 'text' && obj.type === 'text') {
-      setEditingTextId(obj.id);
-      return;
-    }
-
     const screenBounds = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
     setActiveDrag({
       type: handle ? 'resize' : 'move',
-      handle,
+      handle: handle as ResizeHandle,
       startX: e.clientX,
       startY: e.clientY,
       initialBounds: { ...obj.pdfBounds },
       initialScreenBounds: screenBounds,
     });
+    setDragOffset(null);
   };
 
   useEffect(() => {
@@ -200,28 +210,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       const dyScreen = (e.clientY - activeDrag.startY) / zoom;
 
       if (activeDrag.type === 'move') {
-        const dxPdf = dxScreen;
-        const dyPdf = -dyScreen;
-
-        const newPdfX = activeDrag.initialBounds.x + dxPdf;
-        const newPdfY = activeDrag.initialBounds.y + dyPdf;
-
-        onUpdateObject({
-          pdfBounds: {
-            ...selectedObject.pdfBounds,
-            x: newPdfX,
-            y: newPdfY,
-          },
-          matrix: [
-            selectedObject.matrix[0],
-            selectedObject.matrix[1],
-            selectedObject.matrix[2],
-            selectedObject.matrix[3],
-            newPdfX,
-            newPdfY,
-          ],
-          isModified: true,
-        });
+        setDragOffset({ dxScreen, dyScreen });
       } else if (activeDrag.type === 'resize' && activeDrag.handle) {
         let newW = activeDrag.initialBounds.width;
         let newH = activeDrag.initialBounds.height;
@@ -258,27 +247,24 @@ export const Canvas: React.FC<CanvasProps> = ({
             break;
         }
 
-        onUpdateObject({
-          pdfBounds: { x: newX, y: newY, width: newW, height: newH },
-          isModified: true,
-          origin: 'user_created',
-        });
+        setDragOffset({ dxScreen, dyScreen, newBounds: { x: newX, y: newY, width: newW, height: newH } });
       }
     };
 
     const handleMouseUp = () => {
-      if (activeDrag && selectedObject) {
+      if (activeDrag && selectedObject && dragOffset) {
         if (activeDrag.type === 'move') {
-          const dxPdf = selectedObject.pdfBounds.x - activeDrag.initialBounds.x;
-          const dyPdf = selectedObject.pdfBounds.y - activeDrag.initialBounds.y;
-          if (Math.abs(dxPdf) > 0.1 || Math.abs(dyPdf) > 0.1) {
+          const dxPdf = dragOffset.dxScreen;
+          const dyPdf = -dragOffset.dyScreen;
+          if (Math.abs(dxPdf) > 0.5 || Math.abs(dyPdf) > 0.5) {
             onCommitObjectMove(selectedObject.id, dxPdf, dyPdf, activeDrag.initialBounds);
           }
-        } else if (activeDrag.type === 'resize') {
-          onCommitObjectResize(selectedObject.id, selectedObject.pdfBounds, activeDrag.initialBounds);
+        } else if (activeDrag.type === 'resize' && dragOffset.newBounds) {
+          onCommitObjectResize(selectedObject.id, dragOffset.newBounds, activeDrag.initialBounds);
         }
       }
       setActiveDrag(null);
+      setDragOffset(null);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -287,7 +273,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [activeDrag, selectedObject, zoom, page]);
+  }, [activeDrag, selectedObject, dragOffset, zoom, page]);
 
   return (
     <div className="flex-1 overflow-auto bg-[#f5f5f7] flex items-center justify-center p-8 relative select-none">
@@ -315,10 +301,21 @@ export const Canvas: React.FC<CanvasProps> = ({
         {/* Interactive WYSIWYG Editable Layer */}
         {page.objects.map((obj) => {
           if (!obj.visible) return null;
-          const screenRect = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
+          let screenRect = CoordinateSystem.pdfRectToScreenRect(obj.pdfBounds, page, zoom);
+          if (obj.id === selectedObjectId && dragOffset) {
+            if (dragOffset.newBounds) {
+              screenRect = CoordinateSystem.pdfRectToScreenRect(dragOffset.newBounds, page, zoom);
+            } else {
+              screenRect = {
+                ...screenRect,
+                x: screenRect.x + dragOffset.dxScreen * zoom,
+                y: screenRect.y + dragOffset.dyScreen * zoom,
+              };
+            }
+          }
           const isSelected = selectedObjectId === obj.id;
           const isEditingText = editingTextId === obj.id;
-          const isModified = obj.origin === 'user_created' || obj.isModified;
+          const isModified = obj.origin === 'user_created' || obj.isModified || (obj.id === selectedObjectId && !!dragOffset);
           const shouldShowOpaque = !sourcePdf || isModified;
 
           return (
