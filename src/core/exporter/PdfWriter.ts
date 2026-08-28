@@ -223,6 +223,13 @@ export class PdfWriter {
 
       // Register newly created Image XObjects (from user-added/edited images)
       for (const [xKey, xStream] of newResources.xobjects.entries()) {
+        const smaskObj = xStream.dict.get('SMask');
+        if (smaskObj instanceof PdfStream) {
+          const smaskNum = allocNum();
+          objectMap.set(smaskNum, { stream: smaskObj });
+          xStream.dict.set('SMask', new PdfRef(smaskNum, 0));
+        }
+
         const xObjNum = allocNum();
         objectMap.set(xObjNum, { stream: xStream });
         clonedXObjDict.set(xKey, new PdfRef(xObjNum, 0));

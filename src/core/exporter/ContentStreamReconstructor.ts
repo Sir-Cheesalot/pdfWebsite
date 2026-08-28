@@ -24,6 +24,7 @@ import { CoordinateSystem } from '../coords/CoordinateSystem';
 import { FlateDecoder } from '../pdf/FlateDecoder';
 import { FontEngine } from '../pdf/FontEngine';
 import { PdfParser } from '../pdf/PdfParser';
+import { ImageDecoder } from './ImageDecoder';
 
 export class ContentStreamReconstructor {
   private fontEngine: FontEngine;
@@ -640,28 +641,49 @@ export class ContentStreamReconstructor {
     if (!imgObj.src) return null;
 
     try {
-      // Decode data URL
-      const base64Data = imgObj.src.split(',')[1];
-      const binaryStr = atob(base64Data);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
+      const decoded = ImageDecoder.decode(
+        imgObj.src,
+        imgObj.naturalWidth || Math.round(imgObj.pdfBounds.width),
+        imgObj.naturalHeight || Math.round(imgObj.pdfBounds.height)
+      );
+      if (!decoded) {
+        console.error('Failed to decode image data for XObject creation');
+        return null;
       }
 
       const dict = new PdfDict();
       dict.set('Type', new PdfName('XObject'));
       dict.set('Subtype', new PdfName('Image'));
-      dict.set('Width', imgObj.naturalWidth || 400);
-      dict.set('Height', imgObj.naturalHeight || 300);
-      dict.set('ColorSpace', new PdfName('DeviceRGB'));
+      dict.set('Width', decoded.width);
+      dict.set('Height', decoded.height);
+      dict.set('ColorSpace', new PdfName(decoded.colorSpace));
       dict.set('BitsPerComponent', 8);
 
-      if (imgObj.mimeType === 'image/jpeg' || imgObj.src.startsWith('data:image/jpeg')) {
+      // Handle transparency with /SMask if present
+      if (decoded.hasTransparency && decoded.alphaData && decoded.alphaData.length === decoded.width * decoded.height) {
+        const smaskDict = new PdfDict();
+        smaskDict.set('Type', new PdfName('XObject'));
+        smaskDict.set('Subtype', new PdfName('Image'));
+        smaskDict.set('Width', decoded.width);
+        smaskDict.set('Height', decoded.height);
+        smaskDict.set('ColorSpace', new PdfName('DeviceGray'));
+        smaskDict.set('BitsPerComponent', 8);
+
+        const compressedAlpha = FlateDecoder.encodeFlate(decoded.alphaData);
+        smaskDict.set('Filter', new PdfName('FlateDecode'));
+        smaskDict.set('Length', compressedAlpha.length);
+
+        const smaskStream = new PdfStream(smaskDict, compressedAlpha);
+        dict.set('SMask', smaskStream);
+      }
+
+      if (decoded.isDirectJpeg && decoded.jpegBytes) {
         dict.set('Filter', new PdfName('DCTDecode'));
-        return new PdfStream(dict, bytes);
+        dict.set('Length', decoded.jpegBytes.length);
+        return new PdfStream(dict, decoded.jpegBytes);
       } else {
-        // Flate compressed
-        const compressed = FlateDecoder.encodeFlate(bytes);
+        // Flate-encode the raw uncompressed RGB samples (width * height * 3 bytes)
+        const compressed = FlateDecoder.encodeFlate(decoded.rgbData);
         dict.set('Filter', new PdfName('FlateDecode'));
         dict.set('Length', compressed.length);
         return new PdfStream(dict, compressed);
