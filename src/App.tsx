@@ -264,8 +264,35 @@ export const App: React.FC = () => {
   };
 
   const handleCommitObjectResize = (objectId: string, newBounds: Rect, oldBounds: Rect) => {
+    const targetObj = activePage?.objects.find((o) => o.id === objectId);
+    let newDoc = doc;
+
+    if (targetObj && targetObj.origin === 'pdf_source' && oldBounds) {
+      const maskShape: ShapeObject = {
+        id: `mask_${Date.now()}`,
+        type: 'shape',
+        shapeType: 'rect',
+        origin: 'user_created',
+        pageIndex: activePageIndex,
+        pdfBounds: { ...oldBounds },
+        matrix: [1, 0, 0, 1, oldBounds.x, oldBounds.y],
+        rotation: 0,
+        zIndex: 0,
+        opacity: 1,
+        visible: true,
+        locked: true,
+        fillColor: '#ffffff',
+        strokeColor: 'transparent',
+        strokeWidth: 0,
+        isModified: true,
+      };
+      const insertMaskCmd = new InsertObjectCommand(activePageIndex, maskShape);
+      newDoc = commandManager.execute(insertMaskCmd, newDoc);
+      targetObj.origin = 'user_created';
+    }
+
     const cmd = new ResizeObjectCommand(activePageIndex, objectId, newBounds, oldBounds);
-    const newDoc = commandManager.execute(cmd, doc);
+    newDoc = commandManager.execute(cmd, newDoc);
     setDoc(newDoc);
     addLog('EDIT', `Resized object "${objectId}" to (${newBounds.width.toFixed(1)} × ${newBounds.height.toFixed(1)}) pt`);
   };
