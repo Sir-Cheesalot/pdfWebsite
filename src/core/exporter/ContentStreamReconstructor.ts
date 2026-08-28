@@ -245,9 +245,9 @@ export class ContentStreamReconstructor {
     if (obj.type === 'text') {
       return this.serializeTextObject(obj, newFonts, activeCtm);
     } else if (obj.type === 'image') {
-      return this.serializeImageObject(obj, newXObjects);
+      return this.serializeImageObject(obj, newXObjects, activeCtm);
     } else if (obj.type === 'shape') {
-      return this.serializeShapeObject(obj);
+      return this.serializeShapeObject(obj, activeCtm);
     } else if (obj.type === 'table') {
       return this.serializeTableObject(obj, newFonts);
     }
@@ -410,7 +410,8 @@ export class ContentStreamReconstructor {
    */
   private serializeImageObject(
     imgObj: ImageObject,
-    newXObjects: Map<string, PdfStream>
+    newXObjects: Map<string, PdfStream>,
+    activeCtm: Matrix2D = CoordinateSystem.identity()
   ): string {
     // Generate or use resource name
     const xobjKey = imgObj.resourceName ? imgObj.resourceName.replace(/^\//, '') : `Im_Edit_${imgObj.id.replace(/\W/g, '_')}`;
@@ -426,13 +427,30 @@ export class ContentStreamReconstructor {
     const lines: string[] = [];
     lines.push('q'); // save state
 
-    // Transform matrix for image: [width, 0, 0, height, x, y] cm
     const x = imgObj.pdfBounds.x;
     const y = imgObj.pdfBounds.y;
     const w = imgObj.pdfBounds.width;
     const h = imgObj.pdfBounds.height;
+    const rot = imgObj.rotation || 0;
+    const rad = (rot * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
 
-    lines.push(`${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm`);
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+
+    const a = w * cos;
+    const b = w * sin;
+    const c = -h * sin;
+    const d = h * cos;
+    const e = cx - 0.5 * (w * cos - h * sin);
+    const f = cy - 0.5 * (w * sin + h * cos);
+
+    const targetImgMatrix: Matrix2D = [a, b, c, d, e, f];
+    const invCtm = CoordinateSystem.invert(activeCtm);
+    const localMatrix = invCtm ? CoordinateSystem.multiply(targetImgMatrix, invCtm) : targetImgMatrix;
+
+    lines.push(`${localMatrix[0].toFixed(2)} ${localMatrix[1].toFixed(2)} ${localMatrix[2].toFixed(2)} ${localMatrix[3].toFixed(2)} ${localMatrix[4].toFixed(2)} ${localMatrix[5].toFixed(2)} cm`);
     lines.push(`/${xobjKey} Do`);
     lines.push('Q'); // restore state
 
@@ -442,9 +460,40 @@ export class ContentStreamReconstructor {
   /**
    * Serialize a ShapeObject into PDF vector operators
    */
-  private serializeShapeObject(shapeObj: ShapeObject): string {
+  private serializeShapeObject(
+    shapeObj: ShapeObject,
+    activeCtm: Matrix2D = CoordinateSystem.identity()
+  ): string {
     const lines: string[] = [];
     lines.push('q'); // save state
+
+    // If activeCtm or rotation is non-trivial, establish local transform
+    const rot = shapeObj.rotation || 0;
+    const hasCustomCtm = activeCtm[0] !== 1 || activeCtm[1] !== 0 || activeCtm[2] !== 0 || activeCtm[3] !== 1 || activeCtm[4] !== 0 || activeCtm[5] !== 0;
+
+    if (rot !== 0 || hasCustomCtm) {
+      const invCtm = CoordinateSystem.invert(activeCtm);
+      if (rot !== 0) {
+        const rad = (rot * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const cx = shapeObj.pdfBounds.x + shapeObj.pdfBounds.width / 2;
+        const cy = shapeObj.pdfBounds.y + shapeObj.pdfBounds.height / 2;
+        const rotM: Matrix2D = [
+          cos,
+          sin,
+          -sin,
+          cos,
+          cx - cx * cos + cy * sin,
+          cy - cx * sin - cy * cos,
+        ];
+        const localM = invCtm ? CoordinateSystem.multiply(rotM, invCtm) : rotM;
+        lines.push(`${localM[0].toFixed(4)} ${localM[1].toFixed(4)} ${localM[2].toFixed(4)} ${localM[3].toFixed(4)} ${localM[4].toFixed(2)} ${localM[5].toFixed(2)} cm`);
+      } else if (invCtm) {
+        lines.push(`${invCtm[0].toFixed(4)} ${invCtm[1].toFixed(4)} ${invCtm[2].toFixed(4)} ${invCtm[3].toFixed(4)} ${invCtm[4].toFixed(2)} ${invCtm[5].toFixed(2)} cm`);
+      }
+    }
+
     lines.push(`${shapeObj.strokeWidth.toFixed(2)} w`);
 
     const hasStroke = shapeObj.strokeColor && shapeObj.strokeColor !== 'transparent';
