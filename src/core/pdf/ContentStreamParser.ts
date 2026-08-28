@@ -536,6 +536,19 @@ export class ContentStreamParser {
             if (xobj instanceof PdfStream) {
               const subtype = xobj.dict.get('Subtype');
               if (subtype instanceof PdfName && subtype.value === 'Image') {
+                let startOpIdx = opIdx;
+                let endOpIdx = opIdx;
+
+                if (opIdx > 0 && ops[opIdx - 1]?.op === 'cm') {
+                  startOpIdx = opIdx - 1;
+                  if (opIdx > 1 && ops[opIdx - 2]?.op === 'q') {
+                    startOpIdx = opIdx - 2;
+                  }
+                }
+                if (opIdx + 1 < ops.length && ops[opIdx + 1]?.op === 'Q' && startOpIdx <= opIdx - 2) {
+                  endOpIdx = opIdx + 1;
+                }
+
                 const imgObj = this.extractImageObject(
                   pageIndex,
                   objectCounter++,
@@ -543,7 +556,8 @@ export class ContentStreamParser {
                   xobj,
                   state.ctm,
                   streamIndex,
-                  opIdx
+                  startOpIdx,
+                  endOpIdx
                 );
                 if (imgObj) {
                   objects.push(imgObj);
@@ -910,7 +924,8 @@ export class ContentStreamParser {
     xobj: PdfStream,
     ctm: Matrix2D,
     streamIndex: number,
-    opIdx: number
+    startOpIndex: number,
+    endOpIndex: number
   ): ImageObject | null {
     const resolveObj = (val: any) => (this.parser && val instanceof PdfRef ? this.parser.resolve(val) : val);
 
@@ -978,8 +993,8 @@ export class ContentStreamParser {
       mimeType,
       sourcePdfRef: {
         streamIndex,
-        startOpIndex: opIdx,
-        endOpIndex: opIdx,
+        startOpIndex,
+        endOpIndex,
         originalOpName: 'Do',
       },
     };
