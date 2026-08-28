@@ -334,6 +334,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: obj.opacity,
                 zIndex: obj.zIndex,
                 transform: obj.rotation ? `rotate(${obj.rotation}deg)` : undefined,
+                transformOrigin: 'center center',
               }}
               onMouseDown={(e) => handleMouseDown(e, obj)}
               onDoubleClick={(e) => {
@@ -442,17 +443,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
 
-              {/* Image Object Rendering (Only render if user-created or no sourcePdf) */}
-              {obj.type === 'image' && (!sourcePdf || obj.origin === 'user_created') && (
+              {/* Image Object Rendering */}
+              {obj.type === 'image' && (obj as ImageObject).src && (
                 <img
                   src={(obj as ImageObject).src}
                   alt="PDF Image"
-                  className="w-full h-full object-fill pointer-events-none"
+                  className="w-full h-full object-fill pointer-events-none select-none"
+                  draggable={false}
                 />
               )}
 
-              {/* Shape Object Rendering (Only render if user-created or no sourcePdf) */}
-              {obj.type === 'shape' && (!sourcePdf || obj.origin === 'user_created') && (
+              {/* Shape Object Rendering */}
+              {obj.type === 'shape' && (
                 <svg className="w-full h-full overflow-visible pointer-events-none">
                   {(obj as ShapeObject).shapeType === 'rect' && (
                     <rect
