@@ -6,6 +6,7 @@ import {
   ImageObject,
   PageModel,
   Rect,
+  ShapeObject,
   TableObject,
   TextObject,
 } from './core/types/model';
@@ -229,26 +230,35 @@ export const App: React.FC = () => {
 
   const handleCommitObjectMove = (objectId: string, dxPdf: number, dyPdf: number, initialBounds?: Rect) => {
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
-    if (targetObj && targetObj.type === 'text') {
-      const targetText = targetObj as TextObject;
-      const originalY = initialBounds ? initialBounds.y : (targetText.pdfBounds.y - dyPdf);
-      const originalBaselineY = originalY + 0.22 * targetText.fontSize;
-      const originalText = targetText.text;
+    let newDoc = doc;
 
-      const matchingLine = operatorTextLines.find((line) => {
-        return (
-          Math.abs(line.y - originalBaselineY) < 4.5 ||
-          (originalText.length > 2 && line.text.includes(originalText.trim().slice(0, 8)))
-        );
-      });
-      if (matchingLine) {
-        matchingLine.applyEdit(' ');
-        setOperatorTextLines([...operatorTextLines]);
-      }
+    if (targetObj && targetObj.origin === 'pdf_source' && initialBounds) {
+      // Create a solid background mask over the source coordinates to erase the original canvas image/text
+      const maskShape: ShapeObject = {
+        id: `mask_${Date.now()}`,
+        type: 'shape',
+        shapeType: 'rect',
+        origin: 'user_created',
+        pageIndex: activePageIndex,
+        pdfBounds: { ...initialBounds },
+        matrix: [1, 0, 0, 1, initialBounds.x, initialBounds.y],
+        rotation: 0,
+        zIndex: 0,
+        opacity: 1,
+        visible: true,
+        locked: true,
+        fillColor: '#ffffff',
+        strokeColor: 'transparent',
+        strokeWidth: 0,
+        isModified: true,
+      };
+      const insertMaskCmd = new InsertObjectCommand(activePageIndex, maskShape);
+      newDoc = commandManager.execute(insertMaskCmd, newDoc);
+      targetObj.origin = 'user_created';
     }
 
     const cmd = new MoveObjectCommand(activePageIndex, objectId, dxPdf, dyPdf);
-    const newDoc = commandManager.execute(cmd, doc);
+    newDoc = commandManager.execute(cmd, newDoc);
     setDoc(newDoc);
     addLog('EDIT', `Moved object "${objectId}" by (Δx: ${dxPdf.toFixed(1)}pt, Δy: ${dyPdf.toFixed(1)}pt)`);
   };
@@ -271,34 +281,34 @@ export const App: React.FC = () => {
 
   const handleDeleteObject = (objectId: string) => {
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
-    if (targetObj && targetObj.type === 'text') {
-      const targetText = targetObj as TextObject;
-      const oldText = targetText.text;
+    let newDoc = doc;
 
-      // Clear underlying PDF.js drawing instruction
-      const matchingLine = operatorTextLines.find((line) => {
-        const baselineY = targetText.pdfBounds.y + 0.22 * targetText.fontSize;
-        return (
-          Math.abs(line.y - baselineY) < 3.5 ||
-          (oldText.length > 3 && line.text.includes(oldText.slice(0, 8)))
-        );
-      });
-      if (matchingLine) {
-        matchingLine.applyEdit(' ');
-        setOperatorTextLines([...operatorTextLines]);
-      }
-
-      // Replace text with single space and mark modified so it is masked and removed
-      const cmd = new EditTextCommand(activePageIndex, objectId, ' ', oldText);
-      const newDoc = commandManager.execute(cmd, doc);
-      setDoc(newDoc);
-      setSelectedObjectId(null);
-      addLog('EDIT', `Deleted text object "${objectId}" (replaced with space)`);
-      return;
+    if (targetObj && targetObj.origin === 'pdf_source') {
+      // Create a solid background mask over the source coordinates to erase the original canvas image/text
+      const maskShape: ShapeObject = {
+        id: `mask_${Date.now()}`,
+        type: 'shape',
+        shapeType: 'rect',
+        origin: 'user_created',
+        pageIndex: activePageIndex,
+        pdfBounds: { ...targetObj.pdfBounds },
+        matrix: [1, 0, 0, 1, targetObj.pdfBounds.x, targetObj.pdfBounds.y],
+        rotation: 0,
+        zIndex: 0,
+        opacity: 1,
+        visible: true,
+        locked: true,
+        fillColor: '#ffffff',
+        strokeColor: 'transparent',
+        strokeWidth: 0,
+        isModified: true,
+      };
+      const insertMaskCmd = new InsertObjectCommand(activePageIndex, maskShape);
+      newDoc = commandManager.execute(insertMaskCmd, newDoc);
     }
 
     const cmd = new DeleteObjectCommand(activePageIndex, objectId);
-    const newDoc = commandManager.execute(cmd, doc);
+    newDoc = commandManager.execute(cmd, newDoc);
     setDoc(newDoc);
     setSelectedObjectId(null);
     addLog('EDIT', `Deleted object "${objectId}"`);
