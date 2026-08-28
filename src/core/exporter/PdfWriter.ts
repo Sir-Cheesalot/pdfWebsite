@@ -109,16 +109,38 @@ export class PdfWriter {
     const pagesObjNum = allocNum();
     const pageObjNums: number[] = [];
 
-    // Fallback Standard Font Object (Helvetica) - only used for resource keys
-    // that aren't present in a page's original (preserved) Resources dict,
-    // e.g. brand new user-created text on a page with no source PDF.
-    const stdFontObjNum = allocNum();
-    const fontDict = new PdfDict();
-    fontDict.set('Type', new PdfName('Font'));
-    fontDict.set('Subtype', new PdfName('Type1'));
-    fontDict.set('BaseFont', new PdfName('Helvetica'));
-    fontDict.set('Encoding', new PdfName('WinAnsiEncoding'));
-    objectMap.set(stdFontObjNum, { dict: fontDict });
+    // 14 Standard PDF Fonts to support lossless text edits across different styles
+    const standardFonts = [
+      { key: 'F_Helv', name: 'Helvetica' },
+      { key: 'F_HelvB', name: 'Helvetica-Bold' },
+      { key: 'F_HelvI', name: 'Helvetica-Oblique' },
+      { key: 'F_HelvBI', name: 'Helvetica-BoldOblique' },
+      { key: 'F_Times', name: 'Times-Roman' },
+      { key: 'F_TimesB', name: 'Times-Bold' },
+      { key: 'F_TimesI', name: 'Times-Italic' },
+      { key: 'F_TimesBI', name: 'Times-BoldItalic' },
+      { key: 'F_Cour', name: 'Courier' },
+      { key: 'F_CourB', name: 'Courier-Bold' },
+      { key: 'F_CourI', name: 'Courier-Oblique' },
+      { key: 'F_CourBI', name: 'Courier-BoldOblique' },
+      { key: 'F_Symb', name: 'Symbol' },
+      { key: 'F_Zapf', name: 'ZapfDingbats' }
+    ];
+
+    const stdFontsMap = new Map<string, number>();
+
+    for (const f of standardFonts) {
+      const fNum = allocNum();
+      const fDict = new PdfDict();
+      fDict.set('Type', new PdfName('Font'));
+      fDict.set('Subtype', new PdfName('Type1'));
+      fDict.set('BaseFont', new PdfName(f.name));
+      if (f.key !== 'F_Symb' && f.key !== 'F_Zapf') {
+        fDict.set('Encoding', new PdfName('WinAnsiEncoding'));
+      }
+      objectMap.set(fNum, { dict: fDict });
+      stdFontsMap.set(f.key, fNum);
+    }
 
     const reconstructor = new ContentStreamReconstructor();
 
@@ -146,49 +168,67 @@ export class PdfWriter {
       const contentStream = new PdfStream(streamDict, compressedStream);
       objectMap.set(contentStreamObjNum, { stream: contentStream });
 
-      // Page Resources: prefer copying the ORIGINAL page's Resources dict
-      // (fonts, embedded font programs, ExtGStates, existing XObjects, color
-      // spaces, everything) so untouched text keeps rendering with its real
-      // font instead of being collapsed to Helvetica. We still merge in a
-      // fallback Helvetica entry and any newly-created image XObjects.
-      let resDict: PdfDict | null = null;
+      // Page Resources: preserve original Resources dict while properly resolving indirect /Font and /XObject references
+      let resDict = new PdfDict();
+      const clonedFontDict = new PdfDict();
+      const clonedXObjDict = new PdfDict();
+
       if (page.sourcePageDict && this.rawPdfDoc) {
-        const originalResources = this.resolveInherited(page.sourcePageDict, 'Resources');
-        if (originalResources instanceof PdfDict) {
-          const copied = this.copyObjectGraph(originalResources, allocNum);
-          if (copied instanceof PdfDict) {
-            resDict = copied;
+        const rawRes = this.resolveInherited(page.sourcePageDict, 'Resources');
+        if (rawRes instanceof PdfDict) {
+          // Copy other resource categories (ExtGState, ColorSpace, Pattern, Shading, etc.)
+          for (const [k, v] of rawRes.entries()) {
+            if (k !== 'Font' && k !== 'XObject') {
+              const copied = this.copyObjectGraph(v, allocNum);
+              if (copied !== undefined) {
+                resDict.set(k, copied);
+              }
+            }
+          }
+
+          // Resolve and clone original Font dictionary
+          const rawFontObj = this.resolveRaw(rawRes.get('Font'));
+          if (rawFontObj instanceof PdfDict) {
+            for (const [fKey, fVal] of rawFontObj.entries()) {
+              const copiedFont = this.copyObjectGraph(fVal, allocNum);
+              if (copiedFont !== undefined) {
+                clonedFontDict.set(fKey, copiedFont);
+              }
+            }
+          }
+
+          // Resolve and clone original XObject dictionary
+          const rawXObj = this.resolveRaw(rawRes.get('XObject'));
+          if (rawXObj instanceof PdfDict) {
+            for (const [xKey, xVal] of rawXObj.entries()) {
+              const copiedXObj = this.copyObjectGraph(xVal, allocNum);
+              if (copiedXObj !== undefined) {
+                clonedXObjDict.set(xKey, copiedXObj);
+              }
+            }
           }
         }
       }
-      if (!resDict) {
-        resDict = new PdfDict();
-      }
 
-      // Ensure a fallback font is always available under well-known keys,
-      // without clobbering original font resources that use the same keys.
-      let resFontDict = resDict.get('Font');
-      if (!(resFontDict instanceof PdfDict)) {
-        resFontDict = new PdfDict();
-        resDict.set('Font', resFontDict);
+      // Add standard fallback fonts (only for keys that don't collide with original fonts)
+      for (const [fKey, fNum] of stdFontsMap.entries()) {
+        if (!clonedFontDict.has(fKey)) {
+          clonedFontDict.set(fKey, new PdfRef(fNum, 0));
+        }
       }
-      const fontDictTyped = resFontDict as PdfDict;
-      if (!fontDictTyped.has('F_Helv')) fontDictTyped.set('F_Helv', new PdfRef(stdFontObjNum, 0));
-      if (!fontDictTyped.has('F1')) fontDictTyped.set('F1', new PdfRef(stdFontObjNum, 0));
-      if (!fontDictTyped.has('F2')) fontDictTyped.set('F2', new PdfRef(stdFontObjNum, 0));
+      if (!clonedFontDict.has('F1')) clonedFontDict.set('F1', new PdfRef(stdFontsMap.get('F_Helv')!, 0));
+      if (!clonedFontDict.has('F2')) clonedFontDict.set('F2', new PdfRef(stdFontsMap.get('F_Helv')!, 0));
 
-      let resXObjDict = resDict.get('XObject');
-      if (!(resXObjDict instanceof PdfDict)) {
-        resXObjDict = new PdfDict();
-        resDict.set('XObject', resXObjDict);
-      }
-      const xObjDictTyped = resXObjDict as PdfDict;
+      resDict.set('Font', clonedFontDict);
+
       // Register newly created Image XObjects (from user-added/edited images)
       for (const [xKey, xStream] of newResources.xobjects.entries()) {
         const xObjNum = allocNum();
         objectMap.set(xObjNum, { stream: xStream });
-        xObjDictTyped.set(xKey, new PdfRef(xObjNum, 0));
+        clonedXObjDict.set(xKey, new PdfRef(xObjNum, 0));
       }
+
+      resDict.set('XObject', clonedXObjDict);
 
       if (!resDict.has('ProcSet')) {
         resDict.set('ProcSet', [new PdfName('PDF'), new PdfName('Text'), new PdfName('ImageB'), new PdfName('ImageC'), new PdfName('ImageI')]);
@@ -371,7 +411,16 @@ export class PdfWriter {
     } else if (obj instanceof PdfName) {
       this.writeString(obj.toString());
     } else if (obj instanceof PdfString) {
-      this.writeString(`(${obj.toText()})`);
+      if (obj.isHex) {
+        let hex = '<';
+        for (let i = 0; i < obj.bytes.length; i++) {
+          hex += obj.bytes[i].toString(16).padStart(2, '0');
+        }
+        hex += '>';
+        this.writeString(hex);
+      } else {
+        this.writeBytes(this.escapePdfStringBytes(obj.bytes));
+      }
     } else if (obj instanceof PdfRef) {
       this.writeString(obj.toString());
     } else if (Array.isArray(obj)) {
@@ -384,5 +433,27 @@ export class PdfWriter {
     } else if (obj instanceof PdfDict) {
       this.writeDict(obj);
     }
+  }
+
+  private escapePdfStringBytes(bytes: Uint8Array): Uint8Array {
+    const out: number[] = [0x28]; // '('
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      if (b === 0x5c) { // '\'
+        out.push(0x5c, 0x5c);
+      } else if (b === 0x28) { // '('
+        out.push(0x5c, 0x28);
+      } else if (b === 0x29) { // ')'
+        out.push(0x5c, 0x29);
+      } else if (b === 0x0d) { // '\r'
+        out.push(0x5c, 0x72);
+      } else if (b === 0x0a) { // '\n'
+        out.push(0x5c, 0x6e);
+      } else {
+        out.push(b);
+      }
+    }
+    out.push(0x29); // ')'
+    return new Uint8Array(out);
   }
 }

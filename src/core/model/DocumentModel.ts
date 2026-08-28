@@ -68,7 +68,7 @@ export class DocumentModelManager {
       title: fileName.replace(/\.pdf$/i, ''),
       version: parsedPdf.version || '1.7',
       pages,
-      fonts,
+      fonts: fontEngine.getAllFonts(),
       isDirty: false,
       activePageIndex: 0,
       sourcePdf: { objects: parsedPdf.objects, trailer: parsedPdf.trailer },

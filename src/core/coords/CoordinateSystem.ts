@@ -147,20 +147,40 @@ export class CoordinateSystem {
     page: PageModel,
     zoom: number = 1.0
   ): Rect {
-    const cropX = page.cropBox ? page.cropBox[0] : page.mediaBox[0] || 0;
-    const cropY = page.cropBox ? page.cropBox[1] : page.mediaBox[1] || 0;
-    const pageH = page.height;
+    if (!page.rotation || page.rotation === 0) {
+      const cropX = page.cropBox ? page.cropBox[0] : page.mediaBox[0] || 0;
+      const cropY = page.cropBox ? page.cropBox[1] : page.mediaBox[1] || 0;
+      const pageH = page.height;
 
-    const screenX = (rect.x - cropX) * zoom;
-    const screenY = (pageH - (rect.y - cropY) - rect.height) * zoom;
-    const screenW = rect.width * zoom;
-    const screenH = rect.height * zoom;
+      const screenX = (rect.x - cropX) * zoom;
+      const screenY = (pageH - (rect.y - cropY) - rect.height) * zoom;
+      const screenW = rect.width * zoom;
+      const screenH = rect.height * zoom;
+
+      return {
+        x: screenX,
+        y: screenY,
+        width: Math.max(1, screenW),
+        height: Math.max(1, screenH),
+      };
+    }
+
+    // When page has rotation (90, 180, 270), compute transformed corners
+    const p1 = this.pdfToScreenPoint({ x: rect.x, y: rect.y }, page, zoom);
+    const p2 = this.pdfToScreenPoint({ x: rect.x + rect.width, y: rect.y }, page, zoom);
+    const p3 = this.pdfToScreenPoint({ x: rect.x, y: rect.y + rect.height }, page, zoom);
+    const p4 = this.pdfToScreenPoint({ x: rect.x + rect.width, y: rect.y + rect.height }, page, zoom);
+
+    const minX = Math.min(p1.x, p2.x, p3.x, p4.x);
+    const minY = Math.min(p1.y, p2.y, p3.y, p4.y);
+    const maxX = Math.max(p1.x, p2.x, p3.x, p4.x);
+    const maxY = Math.max(p1.y, p2.y, p3.y, p4.y);
 
     return {
-      x: screenX,
-      y: screenY,
-      width: Math.max(1, screenW),
-      height: Math.max(1, screenH),
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
     };
   }
 
@@ -172,20 +192,39 @@ export class CoordinateSystem {
     page: PageModel,
     zoom: number = 1.0
   ): Rect {
-    const cropX = page.cropBox ? page.cropBox[0] : page.mediaBox[0] || 0;
-    const cropY = page.cropBox ? page.cropBox[1] : page.mediaBox[1] || 0;
-    const pageH = page.height;
+    if (!page.rotation || page.rotation === 0) {
+      const cropX = page.cropBox ? page.cropBox[0] : page.mediaBox[0] || 0;
+      const cropY = page.cropBox ? page.cropBox[1] : page.mediaBox[1] || 0;
+      const pageH = page.height;
 
-    const pdfW = rect.width / zoom;
-    const pdfH = rect.height / zoom;
-    const pdfX = rect.x / zoom + cropX;
-    const pdfY = pageH - (rect.y / zoom + pdfH) + cropY;
+      const pdfW = rect.width / zoom;
+      const pdfH = rect.height / zoom;
+      const pdfX = rect.x / zoom + cropX;
+      const pdfY = pageH - (rect.y + rect.height) / zoom + cropY;
+
+      return {
+        x: pdfX,
+        y: pdfY,
+        width: Math.max(1, pdfW),
+        height: Math.max(1, pdfH),
+      };
+    }
+
+    const p1 = this.screenToPdfPoint({ x: rect.x, y: rect.y }, page, zoom);
+    const p2 = this.screenToPdfPoint({ x: rect.x + rect.width, y: rect.y }, page, zoom);
+    const p3 = this.screenToPdfPoint({ x: rect.x, y: rect.y + rect.height }, page, zoom);
+    const p4 = this.screenToPdfPoint({ x: rect.x + rect.width, y: rect.y + rect.height }, page, zoom);
+
+    const minX = Math.min(p1.x, p2.x, p3.x, p4.x);
+    const minY = Math.min(p1.y, p2.y, p3.y, p4.y);
+    const maxX = Math.max(p1.x, p2.x, p3.x, p4.x);
+    const maxY = Math.max(p1.y, p2.y, p3.y, p4.y);
 
     return {
-      x: pdfX,
-      y: pdfY,
-      width: pdfW,
-      height: pdfH,
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
     };
   }
 

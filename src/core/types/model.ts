@@ -60,9 +60,20 @@ export interface BaseEditableObject {
   };
 }
 
+export interface DecodedGlyph {
+  charCode: number;
+  rawBytes: Uint8Array;
+  cid?: number;
+  glyphId?: number;
+  unicode: string;
+  byteLength: number;
+  resolved: boolean;
+}
+
 export interface TextRun {
   text: string;
   pdfBytes?: Uint8Array;
+  glyphs?: DecodedGlyph[];
   x: number;
   y: number;
   width: number;
@@ -176,10 +187,14 @@ export interface PageModel {
 
 export interface FontDescriptorModel {
   name: string;
-  type: string; // 'Type1' | 'TrueType' | 'Type0'
+  cleanName?: string;
+  type: string; // 'Type1' | 'TrueType' | 'Type0' | 'Type3' | 'MMType1'
   isStandard14: boolean;
+  isSubset?: boolean;
   encoding?: string;
   toUnicodeCMap?: Map<number, string>;
+  cMapData?: import('../pdf/CMapParser').CMapData;
+  cidMap?: Map<number, number>;
   widths?: Map<number, number>;
   defaultWidth?: number;
   ascent?: number;

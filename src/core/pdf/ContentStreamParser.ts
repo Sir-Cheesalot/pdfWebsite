@@ -358,7 +358,7 @@ export class ContentStreamParser {
               ? this.fontEngine.resolveFont(currentFontKey, fontObj, this.parser)
               : undefined;
 
-            const { text, widths } = this.fontEngine.decodeString(strArg.bytes, fontDesc);
+            const { text, widths, glyphs } = this.fontEngine.decodeString(strArg.bytes, fontDesc);
             
             // Calculate effective position in PDF coordinates
             const effectiveMatrix = CoordinateSystem.multiply(textMatrix, state.ctm);
@@ -375,6 +375,7 @@ export class ContentStreamParser {
             const run: TextRun = {
               text,
               pdfBytes: strArg.bytes,
+              glyphs,
               x: posX,
               y: posY,
               width: textWidth,
@@ -449,7 +450,7 @@ export class ContentStreamParser {
 
             for (const item of arr) {
               if (item instanceof PdfString) {
-                const { text, widths } = this.fontEngine.decodeString(item.bytes, fontDesc);
+                const { text, widths, glyphs } = this.fontEngine.decodeString(item.bytes, fontDesc);
                 let segmentWidth = 0;
                 for (let i = 0; i < widths.length; i++) {
                   segmentWidth += (widths[i] / 1000) * currentFontSize + charSpacing;
@@ -458,6 +459,7 @@ export class ContentStreamParser {
                 runs.push({
                   text,
                   pdfBytes: item.bytes,
+                  glyphs,
                   x: currentX,
                   y: startY,
                   width: segmentWidth,

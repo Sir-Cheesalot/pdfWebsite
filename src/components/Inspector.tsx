@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { EditableObject, PageModel, ShapeObject, TableObject, TextObject } from '../core/types/model';
 import { OcrVerificationEngine } from '../core/ocr/OcrVerificationEngine';
+import { FontFamilyHelper } from '../core/fonts/FontFamilyHelper';
 
 interface InspectorProps {
   selectedObject: EditableObject | null;
@@ -126,21 +127,45 @@ export const Inspector: React.FC<InspectorProps> = ({
                     <span>Typography</span>
                   </div>
 
-                  {/* Font Family */}
+                  {/* Detected Font Info Badge */}
+                  {textObj.pdfFontKey && (
+                    <div className="flex items-center justify-between p-2 bg-[#0071e3]/10 border border-[#0071e3]/20 rounded-lg">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-semibold text-[#0071e3]">
+                          {FontFamilyHelper.getCleanFontName(textObj.fontName)}
+                        </span>
+                        <span className="text-[9px] text-[#86868b]">
+                          Key: /{textObj.pdfFontKey} • {textObj.fontName.replace(/^[A-Z]{6}\+/, '')}
+                        </span>
+                      </div>
+                      <span className="text-[9px] px-1.5 py-0.5 bg-[#0071e3] text-white font-medium rounded-sm">
+                        PDF Font
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Font Family Selection */}
                   <div>
                     <label className="block text-[10px] text-[#86868b] mb-1">Font Family</label>
                     <select
                       value={textObj.fontName}
                       onChange={(e) => onUpdateObject({ fontName: e.target.value })}
-                      className="w-full bg-white border border-black/[0.08] rounded-lg px-2 py-1 text-[#1d1d1f] focus:outline-none focus:ring-1 focus:ring-[#0071e3]"
+                      className="w-full bg-white border border-black/[0.08] rounded-lg px-2 py-1.5 text-[#1d1d1f] text-xs focus:outline-none focus:ring-1 focus:ring-[#0071e3]"
                     >
-                      <option value="Helvetica">Helvetica (Sans-Serif)</option>
-                      <option value="Helvetica-Bold">Helvetica Bold</option>
-                      <option value="Times-Roman">Times Roman (Serif)</option>
-                      <option value="Times-Bold">Times Bold</option>
-                      <option value="Times-Italic">Times Italic</option>
-                      <option value="Courier">Courier (Monospace)</option>
-                      <option value="Courier-Bold">Courier Bold</option>
+                      {/* Categorized font database including document-detected fonts */}
+                      {FontFamilyHelper.getCategorizedFonts(
+                        activePage.objects
+                          .filter((o): o is TextObject => o.type === 'text')
+                          .map((t) => t.fontName)
+                      ).map((cat) => (
+                        <optgroup key={cat.category} label={cat.category}>
+                          {cat.fonts.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
                     </select>
                   </div>
 

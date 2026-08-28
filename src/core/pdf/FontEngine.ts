@@ -1,7 +1,8 @@
 // Comprehensive PDF Font & Encoding Engine (with Math, Symbol, and UTF-16 CMap Resolution)
 import { PdfDict, PdfName, PdfObject, PdfStream, PdfString } from '../types/pdf';
-import { FontDescriptorModel } from '../types/model';
+import { DecodedGlyph, FontDescriptorModel } from '../types/model';
 import { PdfParser } from './PdfParser';
+import { CMapData, CMapParser } from './CMapParser';
 
 // Standard 14 AFM Glyph widths (1000-unit scale)
 const STANDARD_14_FONTS = new Set([
@@ -77,6 +78,18 @@ const HELVETICA_WIDTHS: { [key: number]: number } = {
 export class FontEngine {
   private parsedFonts = new Map<string, FontDescriptorModel>();
 
+  getFont(fontKey: string): FontDescriptorModel | undefined {
+    return this.parsedFonts.get(fontKey);
+  }
+
+  getAllFonts(): Map<string, FontDescriptorModel> {
+    return new Map(this.parsedFonts);
+  }
+
+  registerFont(fontKey: string, font: FontDescriptorModel): void {
+    this.parsedFonts.set(fontKey, font);
+  }
+
   /**
    * Parse and resolve a font dictionary from page resources
    */
@@ -91,27 +104,32 @@ export class FontEngine {
     }
 
     const baseFontObj = resolved.get('BaseFont');
-    let baseFontName = 'Helvetica';
+    let rawFontName = 'Helvetica';
     if (baseFontObj instanceof PdfName) {
-      baseFontName = baseFontObj.value.replace(/^[A-Z]{6}\+/, ''); // strip subset prefix ABCDEF+
+      rawFontName = baseFontObj.value;
     }
+
+    const isSubset = /^[A-Z]{6}\+/.test(rawFontName);
+    const cleanFontName = rawFontName.replace(/^[A-Z]{6}\+/, '');
 
     const subtypeObj = resolved.get('Subtype');
     const subtype = subtypeObj instanceof PdfName ? subtypeObj.value : 'Type1';
 
-    const isStd14 = STANDARD_14_FONTS.has(baseFontName);
+    const isStd14 = STANDARD_14_FONTS.has(cleanFontName);
     const descriptor: FontDescriptorModel = {
-      name: baseFontName,
+      name: rawFontName,
+      cleanName: cleanFontName,
       type: subtype,
       isStandard14: isStd14,
+      isSubset,
       widths: new Map(),
-      defaultWidth: 500,
+      defaultWidth: subtype === 'Type0' ? 1000 : 500,
       ascent: 750,
       descent: -200,
       capHeight: 700,
     };
 
-    // Parse /FirstChar, /LastChar, /Widths
+    // 1. Parse /FirstChar, /LastChar, /Widths for simple fonts
     const firstChar = Number(resolved.get('FirstChar') || 0);
     const widthsObj = parser.resolve(resolved.get('Widths'));
     if (Array.isArray(widthsObj)) {
@@ -125,14 +143,19 @@ export class FontEngine {
       }
     }
 
-    // Parse /ToUnicode CMap
+    // 2. Parse /ToUnicode CMap
     const toUnicodeObj = parser.resolve(resolved.get('ToUnicode'));
     if (toUnicodeObj instanceof PdfStream) {
       const cmapData = toUnicodeObj.decodedData || toUnicodeObj.data;
-      descriptor.toUnicodeCMap = this.parseToUnicodeCMap(cmapData);
+      const parsedCMap = CMapParser.parse(cmapData);
+      descriptor.cMapData = parsedCMap;
+      descriptor.toUnicodeCMap = parsedCMap.toUnicode;
+      if (parsedCMap.cidMap) {
+        descriptor.cidMap = parsedCMap.cidMap;
+      }
     }
 
-    // Parse /Encoding
+    // 3. Parse /Encoding
     const encObj = parser.resolve(resolved.get('Encoding'));
     if (encObj instanceof PdfName) {
       descriptor.encoding = encObj.value;
@@ -141,17 +164,81 @@ export class FontEngine {
       if (baseEnc instanceof PdfName) {
         descriptor.encoding = baseEnc.value;
       }
+    } else if (encObj instanceof PdfStream) {
+      // Stream CMap
+      const encCmapData = encObj.decodedData || encObj.data;
+      const parsedEncCMap = CMapParser.parse(encCmapData);
+      if (!descriptor.cMapData) {
+        descriptor.cMapData = parsedEncCMap;
+        descriptor.toUnicodeCMap = parsedEncCMap.toUnicode;
+      } else if (parsedEncCMap.codeSpaces.length > 0 && descriptor.cMapData.codeSpaces.length === 0) {
+        descriptor.cMapData.codeSpaces = parsedEncCMap.codeSpaces;
+      }
     }
 
-    // Parse /FontDescriptor
+    // 4. Parse /FontDescriptor for simple fonts
     const fdObj = parser.resolve(resolved.get('FontDescriptor'));
     if (fdObj instanceof PdfDict) {
-      const ascent = Number(fdObj.get('Ascent') || 750);
-      const descent = Number(fdObj.get('Descent') || -200);
-      const capHeight = Number(fdObj.get('CapHeight') || 700);
-      descriptor.ascent = ascent;
-      descriptor.descent = descent;
-      descriptor.capHeight = capHeight;
+      descriptor.ascent = Number(fdObj.get('Ascent') || descriptor.ascent);
+      descriptor.descent = Number(fdObj.get('Descent') || descriptor.descent);
+      descriptor.capHeight = Number(fdObj.get('CapHeight') || descriptor.capHeight);
+    }
+
+    // 5. Handle Type0 Composite Fonts and Descendant CIDFonts
+    if (subtype === 'Type0') {
+      const descFontsObj = parser.resolve(resolved.get('DescendantFonts'));
+      if (Array.isArray(descFontsObj) && descFontsObj.length > 0) {
+        const cidFontDict = parser.resolve(descFontsObj[0]);
+        if (cidFontDict instanceof PdfDict) {
+          // Default Width (DW)
+          const dw = Number(cidFontDict.get('DW') ?? 1000);
+          descriptor.defaultWidth = dw;
+
+          // Parse /W (CIDFont glyph widths array)
+          const wObj = parser.resolve(cidFontDict.get('W'));
+          if (Array.isArray(wObj)) {
+            let i = 0;
+            while (i < wObj.length) {
+              const first = Number(wObj[i++]);
+              if (i >= wObj.length) break;
+              const nextItem = parser.resolve(wObj[i++]);
+              if (Array.isArray(nextItem)) {
+                for (let j = 0; j < nextItem.length; j++) {
+                  descriptor.widths!.set(first + j, Number(nextItem[j] || 0));
+                }
+              } else if (typeof nextItem === 'number') {
+                const last = Number(nextItem);
+                if (i < wObj.length) {
+                  const widthVal = Number(wObj[i++]);
+                  for (let c = first; c <= last; c++) {
+                    descriptor.widths!.set(c, widthVal);
+                  }
+                }
+              }
+            }
+          }
+
+          // Descendant FontDescriptor
+          const cidFdObj = parser.resolve(cidFontDict.get('FontDescriptor'));
+          if (cidFdObj instanceof PdfDict) {
+            descriptor.ascent = Number(cidFdObj.get('Ascent') || descriptor.ascent);
+            descriptor.descent = Number(cidFdObj.get('Descent') || descriptor.descent);
+            descriptor.capHeight = Number(cidFdObj.get('CapHeight') || descriptor.capHeight);
+          }
+
+          // Fallback /ToUnicode on descendant CIDFont if top-level font lacked it
+          if (!descriptor.cMapData) {
+            const descToUnicode = parser.resolve(cidFontDict.get('ToUnicode'));
+            if (descToUnicode instanceof PdfStream) {
+              const cmapData = descToUnicode.decodedData || descToUnicode.data;
+              const parsedCMap = CMapParser.parse(cmapData);
+              descriptor.cMapData = parsedCMap;
+              descriptor.toUnicodeCMap = parsedCMap.toUnicode;
+              if (parsedCMap.cidMap) descriptor.cidMap = parsedCMap.cidMap;
+            }
+          }
+        }
+      }
     }
 
     this.parsedFonts.set(fontNameKey, descriptor);
@@ -159,215 +246,220 @@ export class FontEngine {
   }
 
   /**
-   * Parse a /ToUnicode CMap stream supporting 2-digit, 4-digit, and multi-char UTF-16
-   */
-  private parseToUnicodeCMap(data: Uint8Array): Map<number, string> {
-    const map = new Map<number, string>();
-    const text = new TextDecoder('latin1').decode(data);
-
-    // 1. Match beginbfchar ... endbfchar
-    const bfcharBlocks = text.match(/beginbfchar([\s\S]*?)endbfchar/g);
-    if (bfcharBlocks) {
-      for (const block of bfcharBlocks) {
-        const regex = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g;
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(block)) !== null) {
-          const charCode = parseInt(m[1], 16);
-          const unicodeStr = this.decodeHexToUnicode(m[2]);
-          map.set(charCode, unicodeStr);
-        }
-      }
-    }
-
-    // 2. Match beginbfrange ... endbfrange
-    const bfrangeBlocks = text.match(/beginbfrange([\s\S]*?)endbfrange/g);
-    if (bfrangeBlocks) {
-      for (const block of bfrangeBlocks) {
-        const lines = block.replace(/beginbfrange|endbfrange/g, '').trim().split('\n');
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line) continue;
-
-          // Array form: <start> <end> [ <uni1> <uni2> ... ]
-          const arrayMatch = line.match(/^<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*\[([\s\S]*?)\]/);
-          if (arrayMatch) {
-            const startCode = parseInt(arrayMatch[1], 16);
-            const hexList = arrayMatch[3].match(/<([0-9a-fA-F]+)>/g);
-            if (hexList) {
-              for (let i = 0; i < hexList.length; i++) {
-                const hexVal = hexList[i].replace(/[<>]/g, '');
-                map.set(startCode + i, this.decodeHexToUnicode(hexVal));
-              }
-            }
-            continue;
-          }
-
-          // Single destination form: <start> <end> <dest>
-          const singleMatch = line.match(/^<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/);
-          if (singleMatch) {
-            const startCode = parseInt(singleMatch[1], 16);
-            const endCode = parseInt(singleMatch[2], 16);
-            const destHex = singleMatch[3];
-
-            if (destHex.length <= 4) {
-              let startUni = parseInt(destHex, 16);
-              for (let code = startCode; code <= endCode; code++) {
-                map.set(code, String.fromCharCode(startUni));
-                startUni++;
-              }
-            } else if (destHex.length === 8) {
-              const high = parseInt(destHex.slice(0, 4), 16);
-              const low = parseInt(destHex.slice(4, 8), 16);
-              const baseCodepoint = 0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
-              for (let code = startCode; code <= endCode; code++) {
-                const cp = baseCodepoint + (code - startCode);
-                map.set(code, String.fromCodePoint(cp));
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return map;
-  }
-
-  private decodeHexToUnicode(hex: string): string {
-    if (hex.length <= 2) {
-      return String.fromCharCode(parseInt(hex, 16));
-    }
-    if (hex.length === 4) {
-      return String.fromCharCode(parseInt(hex, 16));
-    }
-    if (hex.length === 8) {
-      const high = parseInt(hex.slice(0, 4), 16);
-      const low = parseInt(hex.slice(4, 8), 16);
-      if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) {
-        const cp = 0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
-        return String.fromCodePoint(cp);
-      }
-    }
-    let res = '';
-    for (let i = 0; i < hex.length; i += 4) {
-      const chunk = hex.substring(i, i + 4);
-      res += String.fromCharCode(parseInt(chunk, 16));
-    }
-    return res;
-  }
-
-  /**
    * Decode raw bytes/hex string to UTF-8 text using font encoding or ToUnicode CMap
+   * Tracks exact DecodedGlyph objects for full WYSIWYG fidelity
    */
-  decodeString(rawBytes: Uint8Array, font?: FontDescriptorModel): { text: string; widths: number[] } {
+  decodeString(
+    rawBytes: Uint8Array,
+    font?: FontDescriptorModel
+  ): { text: string; widths: number[]; glyphs: DecodedGlyph[] } {
     let text = '';
     const widths: number[] = [];
+    const glyphs: DecodedGlyph[] = [];
+
     const cmap = font?.toUnicodeCMap;
-    const isSymbolFont = font?.name.toLowerCase().includes('symbol') || font?.name.toLowerCase().includes('math');
+    const codeSpaces = font?.cMapData?.codeSpaces || [];
+    const isSymbolFont =
+      font?.name.toLowerCase().includes('symbol') || font?.name.toLowerCase().includes('math');
+    const isType0 = font?.type === 'Type0';
+    const defaultByteLength = isType0 ? 2 : 1;
 
-    // Type0 composite fonts (2 bytes per CID)
-    if (font?.type === 'Type0') {
-      for (let i = 0; i < rawBytes.length; i += 2) {
-        const charCode = (rawBytes[i] << 8) | (rawBytes[i + 1] || 0);
-        let char = '';
+    let offset = 0;
+    while (offset < rawBytes.length) {
+      const { code, byteLength, rawBytes: glyphBytes } = CMapParser.readCode(
+        rawBytes,
+        offset,
+        codeSpaces,
+        defaultByteLength
+      );
+      offset += byteLength;
 
-        if (cmap && cmap.has(charCode)) {
-          char = cmap.get(charCode)!;
-        } else if (rawBytes[i] === 0 && rawBytes[i + 1] >= 32 && rawBytes[i + 1] <= 126) {
-          // Standard ASCII
-          char = String.fromCharCode(rawBytes[i + 1]);
-        } else if (rawBytes[i] === 0 && WIN_ANSI_MAP[rawBytes[i + 1]]) {
-          // Standard WinAnsi
-          char = WIN_ANSI_MAP[rawBytes[i + 1]];
-        } else if (charCode >= 32 && charCode <= 126) {
-          char = String.fromCharCode(charCode);
-        } else if (WIN_ANSI_MAP[charCode & 0xff]) {
-          char = WIN_ANSI_MAP[charCode & 0xff];
-        } else {
-          // Skip or output empty rather than converting arbitrary CID integer into Devanagari/Odia
-          char = ' ';
-        }
+      let unicode = '';
+      let resolved = false;
+      const cid = font?.cidMap?.get(code);
 
-        text += char;
-        const w = (font?.widths && font.widths.get(charCode)) || font?.defaultWidth || 500;
-        widths.push(w);
+      // 1. Direct CMap lookup
+      if (cmap && cmap.has(code)) {
+        unicode = cmap.get(code)!;
+        resolved = true;
       }
-    } else {
-      // 1-byte decoding (Type1, TrueType, Type3, Standard 14)
-      for (let i = 0; i < rawBytes.length; i++) {
-        const byte = rawBytes[i];
-        let char = '';
-
-        if (cmap && cmap.has(byte)) {
-          char = cmap.get(byte)!;
-        } else if (isSymbolFont && SYMBOL_FONT_MAP[byte]) {
-          char = SYMBOL_FONT_MAP[byte];
-        } else if (WIN_ANSI_MAP[byte]) {
-          // WinAnsi (±, °, ×, µ, etc.)
-          char = WIN_ANSI_MAP[byte];
-        } else if (byte >= 32 && byte <= 126) {
-          // Printable ASCII
-          char = String.fromCharCode(byte);
-        } else {
-          // Non-printable control byte
-          char = ' ';
-        }
-
-        text += char;
-        const w = (font?.widths && font.widths.get(byte)) || font?.defaultWidth || 500;
-        widths.push(w);
+      // 2. Symbol Font special character mapping
+      else if (isSymbolFont && SYMBOL_FONT_MAP[code]) {
+        unicode = SYMBOL_FONT_MAP[code];
+        resolved = true;
       }
+      // 3. 1-byte WinAnsi
+      else if (byteLength === 1 && WIN_ANSI_MAP[code]) {
+        unicode = WIN_ANSI_MAP[code];
+        resolved = true;
+      }
+      // 4. 1-byte Standard Printable ASCII
+      else if (byteLength === 1 && code >= 32 && code <= 126) {
+        unicode = String.fromCharCode(code);
+        resolved = true;
+      }
+      // 5. 2-byte Identity-H high-byte zero ASCII/WinAnsi
+      else if (byteLength === 2 && (code >> 8) === 0 && (code & 0xff) >= 32 && (code & 0xff) <= 126) {
+        unicode = String.fromCharCode(code & 0xff);
+        resolved = true;
+      } else if (byteLength === 2 && (code >> 8) === 0 && WIN_ANSI_MAP[code & 0xff]) {
+        unicode = WIN_ANSI_MAP[code & 0xff];
+        resolved = true;
+      }
+      // 6. Common whitespace / control characters
+      else if (code === 9 || code === 10 || code === 13 || code === 32) {
+        unicode = String.fromCharCode(code);
+        resolved = true;
+      }
+      // 7. Unmapped / Unknown character: NEVER silently convert to space ' '!
+      else {
+        resolved = false;
+        if (code > 0 && code <= 255 && !this.isControlChar(code)) {
+          unicode = String.fromCharCode(code);
+        } else if (code > 255 && (code & 0xff) >= 32 && (code & 0xff) <= 126) {
+          unicode = String.fromCharCode(code & 0xff);
+        } else {
+          unicode = '\uFFFD'; // Unicode replacement character for unmapped glyph
+        }
+      }
+
+      const w =
+        (font?.widths && font.widths.get(code)) ||
+        font?.defaultWidth ||
+        (isType0 ? 1000 : 500);
+
+      glyphs.push({
+        charCode: code,
+        rawBytes: glyphBytes,
+        cid,
+        unicode,
+        byteLength,
+        resolved,
+      });
+
+      text += unicode;
+      widths.push(w);
     }
 
-    return { text, widths };
+    return { text, widths, glyphs };
   }
 
   /**
    * Encode UTF-8 text string back to PDF bytes conforming to font
    */
   encodeString(text: string, font?: FontDescriptorModel): PdfString {
-    const cmap = font?.toUnicodeCMap;
+    return this.encodeStringWithStatus(text, font).pdfString;
+  }
 
-    if (cmap && cmap.size > 0) {
-      const reverseCMap = new Map<string, number>();
-      for (const [code, uni] of cmap.entries()) {
-        reverseCMap.set(uni, code);
-      }
+  /**
+   * Encode UTF-8 text string back to PDF bytes with capability status
+   * Uses longest-match sequence matching over reverse CMap
+   */
+  encodeStringWithStatus(
+    text: string,
+    font?: FontDescriptorModel
+  ): { pdfString: PdfString; canMapAll: boolean; encodedByteLength: number } {
+    const reverseMap = font?.cMapData?.reverseMap;
+    const is2Byte = font?.type === 'Type0';
 
-      const is2Byte = font?.type === 'Type0';
+    if (reverseMap && reverseMap.size > 0) {
+      const maxKeyLen = font?.cMapData?.maxUnicodeKeyLen || 1;
       const bytes: number[] = [];
       let canMapAll = true;
+      let i = 0;
 
-      for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-        if (reverseCMap.has(ch)) {
-          const code = reverseCMap.get(ch)!;
-          if (is2Byte || code > 255) {
-            bytes.push((code >> 8) & 0xff, code & 0xff);
-          } else {
-            bytes.push(code & 0xff);
+      while (i < text.length) {
+        let matched = false;
+        const maxLen = Math.min(maxKeyLen, text.length - i);
+
+        // Longest-match search
+        for (let l = maxLen; l >= 1; l--) {
+          const sub = text.substring(i, i + l);
+          if (reverseMap.has(sub)) {
+            const code = reverseMap.get(sub)!;
+            if (is2Byte || code > 255) {
+              bytes.push((code >> 8) & 0xff, code & 0xff);
+            } else {
+              bytes.push(code & 0xff);
+            }
+            i += l;
+            matched = true;
+            break;
           }
-        } else {
+        }
+
+        if (!matched) {
           canMapAll = false;
           break;
         }
       }
 
       if (canMapAll) {
-        return new PdfString(new Uint8Array(bytes), is2Byte);
+        return {
+          pdfString: new PdfString(new Uint8Array(bytes), is2Byte),
+          canMapAll: true,
+          encodedByteLength: bytes.length,
+        };
+      } else {
+        // Font had a CMap, but some characters are unencodable in this subset font
+        const fallbackBytes = new Uint8Array(text.length);
+        for (let j = 0; j < text.length; j++) {
+          fallbackBytes[j] = text.charCodeAt(j) & 0xff;
+        }
+        return {
+          pdfString: new PdfString(fallbackBytes, false),
+          canMapAll: false,
+          encodedByteLength: fallbackBytes.length,
+        };
       }
     }
 
-    // Standard WinAnsi / Latin1 string fallback
+    // Standard WinAnsi / Latin1 string fallback (for standard 14 or non-CMap fonts)
     const bytes = new Uint8Array(text.length);
+    let canMapAll = true;
     for (let i = 0; i < text.length; i++) {
-      bytes[i] = text.charCodeAt(i) & 0xff;
+      const cc = text.charCodeAt(i);
+      if (cc > 255) canMapAll = false;
+      bytes[i] = cc & 0xff;
     }
-    return new PdfString(bytes, false);
+    return {
+      pdfString: new PdfString(bytes, false),
+      canMapAll,
+      encodedByteLength: bytes.length,
+    };
+  }
+
+  /**
+   * Diagnostic formatting helper
+   */
+  getFontDiagnostics(fontKey: string): string {
+    const font = this.parsedFonts.get(fontKey);
+    if (!font) return `Font "${fontKey}": Not found`;
+
+    const codeSpacesStr = font.cMapData?.codeSpaces
+      .map((cs) => `<${cs.min.toString(16).padStart(cs.byteLength * 2, '0')}>-<${cs.max.toString(16).padStart(cs.byteLength * 2, '0')}> (${cs.byteLength}B)`)
+      .join(', ') || 'Default';
+
+    return [
+      `Font: ${font.name} (${font.cleanName || font.name})`,
+      `Type: ${font.type}`,
+      `Encoding: ${font.encoding || 'Identity'}`,
+      `Subset: ${font.isSubset ? 'YES' : 'NO'}`,
+      `CodeSpaces: ${codeSpacesStr}`,
+      `Mapped Characters: ${font.toUnicodeCMap?.size || 0}`,
+      `Glyph Widths: ${font.widths?.size || 0} entries (Default: ${font.defaultWidth})`,
+    ].join('\n');
+  }
+
+  private isControlChar(code: number): boolean {
+    return (code >= 0 && code <= 8) || (code >= 11 && code <= 12) || (code >= 14 && code <= 31) || code === 127;
   }
 
   private createFallbackFont(name: string): FontDescriptorModel {
+    const clean = name ? name.replace(/^[A-Z]{6}\+/, '') : 'Helvetica';
     const descriptor: FontDescriptorModel = {
       name: name || 'Helvetica',
+      cleanName: clean,
       type: 'Type1',
       isStandard14: true,
       widths: new Map(),

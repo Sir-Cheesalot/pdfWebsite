@@ -13,6 +13,7 @@ import { CoordinateSystem } from '../core/coords/CoordinateSystem';
 import { OperatorTextLine } from '../core/pdf/PdfJsOperatorInspector';
 import { OriginalPdfPage } from './OriginalPdfPage';
 import { ToolMode } from './Toolbar';
+import { FontFamilyHelper } from '../core/fonts/FontFamilyHelper';
 
 interface CanvasProps {
   page: PageModel;
@@ -293,7 +294,14 @@ export const Canvas: React.FC<CanvasProps> = ({
         className="relative bg-white shadow-[0_12px_40px_rgba(0,0,0,0.07)] border border-black/[0.08] rounded-xs transition-all cursor-default overflow-hidden"
       >
         {/* Pixel-Perfect Original PDF Drawing Instructions */}
-        {sourcePdf && <OriginalPdfPage source={sourcePdf} pageNumber={page.pageIndex + 1} zoom={zoom} />}
+        {sourcePdf && (
+          <OriginalPdfPage
+            key={`orig_pdf_page_${page.pageIndex}_${zoom}`}
+            source={sourcePdf}
+            pageNumber={page.pageIndex + 1}
+            zoom={zoom}
+          />
+        )}
 
         {/* Interactive WYSIWYG Editable Layer */}
         {page.objects.map((obj) => {
@@ -330,7 +338,28 @@ export const Canvas: React.FC<CanvasProps> = ({
             >
               {/* Text Object Rendering */}
               {obj.type === 'text' && (
-                <div className="w-full h-full flex items-start">
+                <div className="w-full h-full flex items-start relative">
+                  {/* Floating Contextual Font & Style Pill on Selection */}
+                  {isSelected && !isEditingText && (
+                    <div className="absolute -top-7 left-0 flex items-center space-x-1.5 px-2 py-0.5 bg-[#1d1d1f] text-white text-[10px] rounded-md shadow-md pointer-events-none whitespace-nowrap z-50 animate-in fade-in zoom-in-95">
+                      <span className="font-semibold text-[#0071e3]">
+                        {FontFamilyHelper.getCleanFontName((obj as TextObject).fontName)}
+                      </span>
+                      <span className="text-white/40">•</span>
+                      <span>{Math.round((obj as TextObject).fontSize)} pt</span>
+                      {(obj as TextObject).bold && <span className="font-bold text-amber-300">B</span>}
+                      {(obj as TextObject).italic && <span className="italic text-amber-300">I</span>}
+                      {(obj as TextObject).origin === 'pdf_source' && (
+                        <>
+                          <span className="text-white/40">•</span>
+                          <span className="text-[#30d158]">
+                            {(obj as TextObject).pdfFontKey ? `/${(obj as TextObject).pdfFontKey}` : 'Detected Font'}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {isEditingText ? (
                     <textarea
                       autoFocus
@@ -346,31 +375,21 @@ export const Canvas: React.FC<CanvasProps> = ({
                         if (e.key === 'Escape') setEditingTextId(null);
                       }}
                       style={{
-                        fontFamily: (obj as TextObject).fontName.includes('Times')
-                          ? '"Times New Roman", Times, serif'
-                          : (obj as TextObject).fontName.includes('Courier')
-                          ? '"Courier New", Courier, monospace'
-                          : (obj as TextObject).fontName.toLowerCase().includes('symbol') || (obj as TextObject).fontName.toLowerCase().includes('math')
-                          ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
-                          : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
+                        fontFamily: FontFamilyHelper.getEffectiveCssFontFamily((obj as TextObject).fontName),
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         color: (obj as TextObject).fillColor || '#1d1d1f',
                         fontWeight: (obj as TextObject).bold ? 'bold' : 'normal',
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
+                        letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
                         lineHeight: 1.15,
+                        textAlign: (obj as TextObject).alignment || 'left',
                       }}
-                      className="w-full h-full bg-white text-[#1d1d1f] border border-[#0071e3] rounded p-1 resize-none focus:outline-none shadow-md z-50 ring-2 ring-[#0071e3]/20"
+                      className="w-full h-full bg-white text-[#1d1d1f] border border-[#0071e3] rounded px-1 py-0.5 resize-none focus:outline-none shadow-md z-50 ring-2 ring-[#0071e3]/20"
                     />
                   ) : (
                     <div
                       style={{
-                        fontFamily: (obj as TextObject).fontName.includes('Times')
-                          ? '"Times New Roman", Times, serif'
-                          : (obj as TextObject).fontName.includes('Courier')
-                          ? '"Courier New", Courier, monospace'
-                          : (obj as TextObject).fontName.toLowerCase().includes('symbol') || (obj as TextObject).fontName.toLowerCase().includes('math')
-                          ? '"Cambria Math", "Segoe UI Symbol", Symbol, serif'
-                          : '-apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif',
+                        fontFamily: FontFamilyHelper.getEffectiveCssFontFamily((obj as TextObject).fontName),
                         fontSize: `${(obj as TextObject).fontSize * zoom}px`,
                         // When unedited, keep transparent so the original PDF drawing instructions show with 100% fidelity!
                         color: shouldShowOpaque ? ((obj as TextObject).fillColor || '#1d1d1f') : 'transparent',
@@ -378,20 +397,31 @@ export const Canvas: React.FC<CanvasProps> = ({
                         fontStyle: (obj as TextObject).italic ? 'italic' : 'normal',
                         textDecoration: (obj as TextObject).underline ? 'underline' : 'none',
                         letterSpacing: `${((obj as TextObject).charSpacing || 0) * zoom}px`,
-                        lineHeight: 1.15,
+                        lineHeight: 1.1,
                         textAlign: (obj as TextObject).alignment || 'left',
-                        whiteSpace: 'pre-wrap',
-                        display: 'flex',
-                        alignItems: 'center',
-                        // Seamlessly integrate edited text without clunky overlay shadows
+                        whiteSpace: 'pre',
+                        overflow: 'visible',
+                        padding: 0,
+                        margin: 0,
                         backgroundColor: shouldShowOpaque && sourcePdf
-                          ? '#ffffff'
+                          ? (() => {
+                              // Must fully mask original PDF text below when overlay is showing modified content.
+                              // Detect if text is light-colored (would be invisible on white bg).
+                              const fc = ((obj as TextObject).fillColor || '#000000').toLowerCase();
+                              const isLightText = fc === '#ffffff' || fc === 'white' || fc === 'rgb(255, 255, 255)' || fc === '#fff';
+                              // Light text: use near-black background to remain visible (banner/dark-card context).
+                              // Dark text: use white background to mask original PDF text.
+                              return isLightText ? '#1a1a2e' : '#ffffff';
+                            })()
                           : isSelected && sourcePdf
                           ? 'rgba(0, 113, 227, 0.06)'
                           : 'transparent',
+                        boxShadow: shouldShowOpaque && sourcePdf
+                          ? '0 0 0 1.5px rgba(0,0,0,0.08)'
+                          : undefined,
                         borderRadius: isSelected ? '2px' : undefined,
                       }}
-                      className="w-full h-full select-none"
+                      className="w-full h-full select-none flex items-start"
                     >
                       {(obj as TextObject).text}
                     </div>

@@ -13,12 +13,14 @@ import {
   DocumentModel,
   EditableObject,
   ImageObject,
+  Matrix2D,
   PageModel,
   ShapeObject,
   TableObject,
   TextObject,
 } from '../types/model';
 import { ContentStreamParser } from '../pdf/ContentStreamParser';
+import { CoordinateSystem } from '../coords/CoordinateSystem';
 import { FlateDecoder } from '../pdf/FlateDecoder';
 import { FontEngine } from '../pdf/FontEngine';
 import { PdfParser } from '../pdf/PdfParser';
@@ -55,6 +57,14 @@ export class ContentStreamReconstructor {
   ): { streamBytes: Uint8Array; newResources: { fonts: Map<string, PdfRef>; xobjects: Map<string, PdfStream> } } {
     const newFonts = new Map<string, PdfRef>();
     const newXObjects = new Map<string, PdfStream>();
+
+    if (doc.fonts) {
+      for (const [key, fontDesc] of doc.fonts.entries()) {
+        if (!this.fontEngine.getFont(key)) {
+          this.fontEngine.registerFont(key, fontDesc);
+        }
+      }
+    }
 
     const userCreatedObjects: EditableObject[] = page.objects.filter((o) => o.origin === 'user_created' && o.visible);
 
@@ -97,12 +107,33 @@ export class ContentStreamReconstructor {
         const trackedForStream = byStream.get(streamIndex) || new Map();
 
         let skipUntilOpIndex = -1;
-
         let inText = false;
+
+        let currentCtm: Matrix2D = CoordinateSystem.identity();
+        const ctmStack: Matrix2D[] = [];
+
         for (let i = 0; i < streamOps.length; i++) {
+          const op = streamOps[i];
+
+          // Track CTM state through stream
+          if (op.op === 'q') {
+            ctmStack.push([...currentCtm]);
+          } else if (op.op === 'Q') {
+            if (ctmStack.length > 0) currentCtm = ctmStack.pop()!;
+          } else if (op.op === 'cm' && op.args.length >= 6) {
+            const cmM: Matrix2D = [
+              Number(op.args[0]),
+              Number(op.args[1]),
+              Number(op.args[2]),
+              Number(op.args[3]),
+              Number(op.args[4]),
+              Number(op.args[5]),
+            ];
+            currentCtm = CoordinateSystem.multiply(cmM, currentCtm);
+          }
+
           if (i <= skipUntilOpIndex) continue;
 
-          const op = streamOps[i];
           const trackedObj = trackedForStream.get(i);
 
           if (trackedObj && trackedObj.sourcePdfRef) {
@@ -125,7 +156,7 @@ export class ContentStreamReconstructor {
                 pushRaw(data.subarray(startOp.startByte, endOp.endByte));
                 pushRaw(NEWLINE);
               } else {
-                const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
+                const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects, currentCtm);
                 if (opString) {
                   pushText(opString);
                   pushRaw(NEWLINE);
@@ -138,7 +169,7 @@ export class ContentStreamReconstructor {
                 pushRaw(NEWLINE);
                 inText = false;
               }
-              const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects);
+              const opString = this.serializeEditableObject(trackedObj, newFonts, newXObjects, currentCtm);
               if (opString) {
                 pushText(opString);
                 pushRaw(NEWLINE);
@@ -204,10 +235,11 @@ export class ContentStreamReconstructor {
   private serializeEditableObject(
     obj: EditableObject,
     newFonts: Map<string, PdfRef>,
-    newXObjects: Map<string, PdfStream>
+    newXObjects: Map<string, PdfStream>,
+    activeCtm: Matrix2D = CoordinateSystem.identity()
   ): string {
     if (obj.type === 'text') {
-      return this.serializeTextObject(obj, newFonts);
+      return this.serializeTextObject(obj, newFonts, activeCtm);
     } else if (obj.type === 'image') {
       return this.serializeImageObject(obj, newXObjects);
     } else if (obj.type === 'shape') {
@@ -218,10 +250,33 @@ export class ContentStreamReconstructor {
     return '';
   }
 
+  private getBestStandardFont(fontName: string, bold: boolean, italic: boolean): string {
+    const fn = (fontName || '').toLowerCase();
+    
+    if (fn.includes('symbol') || fn.includes('math')) return '/F_Symb';
+    if (fn.includes('zapf')) return '/F_Zapf';
+
+    let base = 'Helv';
+    if (fn.includes('times') || fn.includes('serif') || fn.includes('minion') || fn.includes('garamond') || fn.includes('georgia') || fn.includes('cambria')) {
+      base = 'Times';
+    } else if (fn.includes('courier') || fn.includes('mono') || fn.includes('consolas')) {
+      base = 'Cour';
+    }
+
+    if (bold && italic) return `/F_${base}BI`;
+    if (bold) return `/F_${base}B`;
+    if (italic) return `/F_${base}I`;
+    return `/F_${base}`;
+  }
+
   /**
    * Serialize a TextObject into compliant BT ... ET stream
    */
-  private serializeTextObject(textObj: TextObject, newFonts: Map<string, PdfRef>): string {
+  private serializeTextObject(
+    textObj: TextObject,
+    newFonts: Map<string, PdfRef>,
+    activeCtm: Matrix2D = CoordinateSystem.identity()
+  ): string {
     const lines: string[] = [];
     lines.push('q'); // save state
 
@@ -231,8 +286,73 @@ export class ContentStreamReconstructor {
 
     lines.push('BT'); // Begin Text
 
-    // Font selection: use standard 1-byte WinAnsi font /F_Helv for newly edited/created text
-    const fontKey = '/F_Helv';
+    // 1. Try encoding with original font if available and capable of encoding all characters
+    let fontKey = '';
+    let textOp = '';
+
+    const origFont = textObj.pdfFontKey ? this.fontEngine.getFont(textObj.pdfFontKey) : undefined;
+    const isSameFont = origFont && (
+      textObj.fontName === origFont.name ||
+      textObj.fontName === origFont.cleanName ||
+      textObj.fontName === origFont.name.replace(/^[A-Z]{6}\+/, '')
+    );
+
+    if (origFont && textObj.pdfFontKey && isSameFont) {
+      // Check if we can serialize as TJ array preserving original run adjustments
+      const runsText = (textObj.runs || []).map((r) => r.text).join('');
+      if (textObj.runs && textObj.runs.length > 1 && runsText === textObj.text) {
+        const tjItems: string[] = [];
+        let canEncodeAllRuns = true;
+
+        for (const run of textObj.runs) {
+          if (!run.text) continue;
+          const enc = this.fontEngine.encodeStringWithStatus(run.text, origFont);
+          if (enc.canMapAll) {
+            let hex = '';
+            for (let b = 0; b < enc.pdfString.bytes.length; b++) {
+              hex += enc.pdfString.bytes[b].toString(16).padStart(2, '0');
+            }
+            tjItems.push(`<${hex}>`);
+            if (typeof run.rawTJAdjustment === 'number' && run.rawTJAdjustment !== 0) {
+              tjItems.push(run.rawTJAdjustment.toString());
+            }
+          } else {
+            canEncodeAllRuns = false;
+            break;
+          }
+        }
+
+        if (canEncodeAllRuns && tjItems.length > 0) {
+          fontKey = `/${textObj.pdfFontKey}`;
+          textOp = `[ ${tjItems.join(' ')} ] TJ`;
+        }
+      }
+
+      if (!textOp) {
+        const encodeRes = this.fontEngine.encodeStringWithStatus(textObj.text, origFont);
+        if (encodeRes.canMapAll && encodeRes.encodedByteLength > 0) {
+          fontKey = `/${textObj.pdfFontKey}`;
+          if (encodeRes.pdfString.isHex || origFont.type === 'Type0') {
+            let hex = '';
+            const bytes = encodeRes.pdfString.bytes;
+            for (let i = 0; i < bytes.length; i++) {
+              hex += bytes[i].toString(16).padStart(2, '0');
+            }
+            textOp = `<${hex}> Tj`;
+          } else {
+            textOp = `(${this.escapePdfString(encodeRes.pdfString.toText())}) Tj`;
+          }
+        }
+      }
+    }
+
+    if (!fontKey) {
+      // 2. Fallback: dynamically match Standard 14 PDF fonts based on original font name & style
+      fontKey = this.getBestStandardFont(textObj.fontName, textObj.bold || false, textObj.italic || false);
+      const escaped = this.escapePdfString(textObj.text);
+      textOp = `(${escaped}) Tj`;
+    }
+
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
 
     // Character spacing & leading
@@ -246,15 +366,18 @@ export class ContentStreamReconstructor {
       lines.push(`${textObj.lineHeight.toFixed(2)} TL`);
     }
 
-    // Set Text Matrix (Tm) to exact PDF position
+    // The stored textObj.matrix = textMatrix × CTM (absolute combined matrix from parsing).
+    // To emit the correct Tm inside the current CTM context:
+    //   emitted_Tm × activeCtm = textObj.matrix
+    //   emitted_Tm = textObj.matrix × activeCtm^(-1)
+    // If activeCtm is identity (no cm operators), emitted_Tm = textObj.matrix directly.
     const m = textObj.matrix;
-    const posX = textObj.pdfBounds.x;
-    const posY = textObj.pdfBounds.y;
-    lines.push(`${m[0].toFixed(4)} ${m[1].toFixed(4)} ${m[2].toFixed(4)} ${m[3].toFixed(4)} ${posX.toFixed(2)} ${posY.toFixed(2)} Tm`);
+    const invCtm = CoordinateSystem.invert(activeCtm);
+    const localMatrix = invCtm ? CoordinateSystem.multiply(m, invCtm) : m;
 
-    // Escape text string
-    const escaped = this.escapePdfString(textObj.text);
-    lines.push(`(${escaped}) Tj`);
+    lines.push(`${localMatrix[0].toFixed(4)} ${localMatrix[1].toFixed(4)} ${localMatrix[2].toFixed(4)} ${localMatrix[3].toFixed(4)} ${localMatrix[4].toFixed(2)} ${localMatrix[5].toFixed(2)} Tm`);
+
+    lines.push(textOp);
 
     lines.push('ET'); // End Text
     lines.push('Q'); // restore state
@@ -400,7 +523,8 @@ export class ContentStreamReconstructor {
             const tRgb = this.parseColorToRgb(cell.textColor || '#000000');
             lines.push(`${(tRgb.r / 255).toFixed(3)} ${(tRgb.g / 255).toFixed(3)} ${(tRgb.b / 255).toFixed(3)} rg`);
             lines.push('BT');
-            lines.push(`/F_Helv ${(cell.fontSize || 10).toFixed(2)} Tf`);
+            const fontKey = this.getBestStandardFont(cell.fontName || 'Helvetica', cell.bold || false, cell.italic || false);
+            lines.push(`${fontKey} ${(cell.fontSize || 10).toFixed(2)} Tf`);
 
             const textPad = cell.padding || 4;
             const textX = currentX + textPad;
