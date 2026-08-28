@@ -935,13 +935,11 @@ export class ContentStreamParser {
     } else {
       const raw = xobj.decodedData || FlateDecoder.decodeStream(xobj);
       const colorSpace = xobj.dict.get('ColorSpace');
-      const csName = colorSpace instanceof PdfName
-        ? colorSpace.value
-        : Array.isArray(colorSpace) && colorSpace[0] instanceof PdfName
-        ? colorSpace[0].value
-        : 'DeviceRGB';
       const bpc = Number(xobj.dict.get('BitsPerComponent') || 8);
-      dataUrl = this.rawRgbToDataUrl(raw, width, height, csName, bpc);
+      const isImageMask = xobj.dict.get('ImageMask') === true;
+      const decodeArr = xobj.dict.get('Decode');
+
+      dataUrl = this.rawRgbToDataUrl(raw, width, height, colorSpace, bpc, isImageMask, decodeArr);
     }
 
     // PDF image dimension in user units is determined by CTM:
@@ -992,8 +990,10 @@ export class ContentStreamParser {
     data: Uint8Array,
     width: number,
     height: number,
-    colorSpace: string = 'DeviceRGB',
-    bitsPerComponent: number = 8
+    colorSpaceObj?: any,
+    bitsPerComponent: number = 8,
+    isImageMask: boolean = false,
+    decodeArrObj?: any
   ): string {
     if (!data || data.length === 0 || width <= 0 || height <= 0) return '';
 
@@ -1005,11 +1005,41 @@ export class ContentStreamParser {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           const imgData = ctx.createImageData(width, height);
-          const isCMYK = colorSpace.includes('CMYK') || (!colorSpace.includes('RGB') && !colorSpace.includes('Gray') && data.length >= width * height * 4);
-          const isGray = colorSpace.includes('Gray') || colorSpace.includes('DeviceGray') || (data.length < width * height * 3 && !isCMYK);
 
-          if (bitsPerComponent === 1) {
-            // 1-bit monochrome mask: each row is padded to byte boundaries
+          // 1. Check for Indexed ColorSpace: [/Indexed, baseCS, hival, lookup]
+          let isIndexed = false;
+          let lookupTable: Uint8Array | null = null;
+          let csName = 'DeviceRGB';
+
+          if (colorSpaceObj instanceof PdfName) {
+            csName = colorSpaceObj.value;
+          } else if (Array.isArray(colorSpaceObj)) {
+            const first = colorSpaceObj[0] instanceof PdfName ? colorSpaceObj[0].value : String(colorSpaceObj[0]).replace(/^\//, '');
+            if (first === 'Indexed' || first === 'I') {
+              isIndexed = true;
+              const lookupRaw = this.parser ? this.parser.resolve(colorSpaceObj[3]) : colorSpaceObj[3];
+              if (lookupRaw instanceof PdfString) {
+                lookupTable = new Uint8Array(lookupRaw.bytes);
+              } else if (lookupRaw instanceof PdfStream) {
+                lookupTable = lookupRaw.decodedData || FlateDecoder.decodeStream(lookupRaw);
+              } else if (lookupRaw instanceof Uint8Array) {
+                lookupTable = lookupRaw;
+              }
+            } else if (first) {
+              csName = first;
+            }
+          }
+
+          // Invert check from /Decode array
+          let decodeInverted = false;
+          if (Array.isArray(decodeArrObj) && decodeArrObj.length >= 2) {
+            if (Number(decodeArrObj[0]) > Number(decodeArrObj[1])) {
+              decodeInverted = true;
+            }
+          }
+
+          if (isImageMask || bitsPerComponent === 1) {
+            // 1-bit monochrome mask: each row padded to byte boundary
             const rowStride = Math.ceil(width / 8);
             for (let y = 0; y < height; y++) {
               const rowOffset = y * rowStride;
@@ -1017,15 +1047,32 @@ export class ContentStreamParser {
                 const byteIdx = rowOffset + Math.floor(x / 8);
                 const bitOffset = 7 - (x % 8);
                 const bit = byteIdx < data.length ? ((data[byteIdx] >> bitOffset) & 1) : 0;
-                const val = bit ? 255 : 0;
+                let val = bit ? 255 : 0;
+                if (decodeInverted) val = 255 - val;
+
                 const outIdx = (y * width + x) * 4;
                 imgData.data[outIdx] = val;
                 imgData.data[outIdx + 1] = val;
                 imgData.data[outIdx + 2] = val;
-                imgData.data[outIdx + 3] = 255;
+                imgData.data[outIdx + 3] = isImageMask && !bit ? 0 : 255;
               }
             }
-          } else if (isCMYK) {
+          } else if (isIndexed && lookupTable && lookupTable.length > 0) {
+            // Indexed Palette lookup: each pixel is an index byte into the RGB lookup table
+            for (let i = 0; i < width * height; i++) {
+              const idx = data[i] ?? 0;
+              const lutOffset = idx * 3;
+              const r = lutOffset < lookupTable.length ? lookupTable[lutOffset] : 0;
+              const g = lutOffset + 1 < lookupTable.length ? lookupTable[lutOffset + 1] : 0;
+              const b = lutOffset + 2 < lookupTable.length ? lookupTable[lutOffset + 2] : 0;
+
+              const outIdx = i * 4;
+              imgData.data[outIdx] = r;
+              imgData.data[outIdx + 1] = g;
+              imgData.data[outIdx + 2] = b;
+              imgData.data[outIdx + 3] = 255;
+            }
+          } else if (csName.includes('CMYK') || (!csName.includes('RGB') && !csName.includes('Gray') && data.length >= width * height * 4)) {
             // CMYK (4 bytes per pixel) -> standard RGB conversion
             for (let i = 0; i < width * height; i++) {
               const c = (data[i * 4] || 0) / 255;
@@ -1043,10 +1090,11 @@ export class ContentStreamParser {
               imgData.data[outIdx + 2] = b;
               imgData.data[outIdx + 3] = 255;
             }
-          } else if (isGray) {
+          } else if (csName.includes('Gray') || csName.includes('DeviceGray') || (data.length < width * height * 3)) {
             // Grayscale (1 byte per pixel)
             for (let i = 0; i < width * height; i++) {
-              const val = data[i] ?? 0;
+              let val = data[i] ?? 0;
+              if (decodeInverted) val = 255 - val;
               const outIdx = i * 4;
               imgData.data[outIdx] = val;
               imgData.data[outIdx + 1] = val;
@@ -1063,6 +1111,7 @@ export class ContentStreamParser {
               imgData.data[outIdx + 3] = 255;
             }
           }
+
           ctx.putImageData(imgData, 0, 0);
           return canvas.toDataURL('image/png');
         }
