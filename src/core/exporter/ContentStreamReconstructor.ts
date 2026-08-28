@@ -101,6 +101,8 @@ export class ContentStreamReconstructor {
         }
       }
     } else {
+      let lastActiveCtm: Matrix2D = CoordinateSystem.identity();
+
       for (const { data, streamIndex } of sourceStreams) {
         const streamParser = new ContentStreamParser(this.parser || new PdfParser(new Uint8Array()), this.fontEngine);
         const streamOps = streamParser.parseOperators(data);
@@ -200,11 +202,13 @@ export class ContentStreamReconstructor {
           pushText('ET');
           pushRaw(NEWLINE);
         }
+
+        lastActiveCtm = currentCtm;
       }
 
-      // Append newly inserted user elements
+      // Append newly inserted user elements (with active CTM compensation)
       for (const userObj of userCreatedObjects) {
-        const opString = this.serializeEditableObject(userObj, newFonts, newXObjects);
+        const opString = this.serializeEditableObject(userObj, newFonts, newXObjects, lastActiveCtm);
         if (opString) {
           pushText(opString);
           pushRaw(NEWLINE);

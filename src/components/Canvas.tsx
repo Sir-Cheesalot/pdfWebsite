@@ -82,13 +82,18 @@ export const Canvas: React.FC<CanvasProps> = ({
     const pdfPt = CoordinateSystem.screenToPdfPoint({ x: clickScreenX, y: clickScreenY }, page, zoom);
 
     if (currentTool === 'text') {
+      const fontSize = 14;
+      const height = 20;
+      const pdfY = Math.max(0, pdfPt.y - height);
+      const baselineY = pdfY + 4;
+
       const newText: TextObject = {
         id: `txt_user_${Date.now()}`,
         type: 'text',
         origin: 'user_created',
         pageIndex: page.pageIndex,
-        pdfBounds: { x: pdfPt.x, y: pdfPt.y, width: 140, height: 18 },
-        matrix: [1, 0, 0, 1, pdfPt.x, pdfPt.y],
+        pdfBounds: { x: pdfPt.x, y: pdfY, width: 140, height },
+        matrix: [1, 0, 0, 1, pdfPt.x, baselineY],
         rotation: 0,
         zIndex: page.objects.length + 1,
         opacity: 1,
@@ -97,7 +102,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         text: 'Enter text here',
         runs: [],
         fontName: 'Helvetica',
-        fontSize: 14,
+        fontSize,
         lineHeight: 18,
         charSpacing: 0,
         wordSpacing: 0,
