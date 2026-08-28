@@ -417,8 +417,8 @@ export class ContentStreamReconstructor {
     // Generate or use resource name
     const xobjKey = imgObj.resourceName ? imgObj.resourceName.replace(/^\//, '') : `Im_Edit_${imgObj.id.replace(/\W/g, '_')}`;
     
-    // Create new PDF Image XObject stream if user-created or if not from source PDF
-    if (imgObj.src && !imgObj.sourcePdfRef && !newXObjects.has(xobjKey)) {
+    // Create new PDF Image XObject stream if newly created, user-created, or modified
+    if (imgObj.src && (!imgObj.sourcePdfRef || imgObj.isModified) && !newXObjects.has(xobjKey)) {
       const imgStream = this.createImageXObjectStream(imgObj);
       if (imgStream) {
         newXObjects.set(xobjKey, imgStream);
