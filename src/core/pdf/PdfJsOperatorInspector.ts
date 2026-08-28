@@ -161,23 +161,16 @@ export async function renderOriginalPdfPage(
   const pdf = await task.promise;
   const page = await pdf.getPage(pageNumber);
 
-  // PDF.js v6+: viewport.transform handles Y-flip internally.
-  // For HiDPI: size the canvas buffer larger, scale the context, but let
-  // viewport handle the coordinate transform via page.render().
-  // Do NOT pass a custom `transform` — it replaces the viewport's Y-flip.
-  const viewport = page.getViewport({ scale });
   const outputScale = window.devicePixelRatio || 1;
+  const viewport = page.getViewport({ scale: scale * outputScale });
 
-  canvas.width = Math.floor(viewport.width * outputScale);
-  canvas.height = Math.floor(viewport.height * outputScale);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  canvas.style.width = `${Math.floor(viewport.width / outputScale)}px`;
+  canvas.style.height = `${Math.floor(viewport.height / outputScale)}px`;
 
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas 2D context is unavailable.');
-
-  // Reset and scale context for HiDPI
-  context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
 
   const renderTask = (page as any).render({
     canvasContext: context,
