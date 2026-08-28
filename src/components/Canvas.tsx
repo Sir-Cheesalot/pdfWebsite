@@ -443,8 +443,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div>
               )}
 
-              {/* Image Object Rendering (Render if user-created, modified, or standalone) */}
-              {obj.type === 'image' && (!sourcePdf || obj.origin === 'user_created' || obj.isModified) && (
+              {/* Image Object Rendering */}
+              {obj.type === 'image' && (obj as ImageObject).src && (
                 <img
                   src={(obj as ImageObject).src}
                   alt="PDF Image"

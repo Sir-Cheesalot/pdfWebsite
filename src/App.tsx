@@ -232,7 +232,7 @@ export const App: React.FC = () => {
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
     let newDoc = doc;
 
-    if (targetObj && targetObj.origin === 'pdf_source' && initialBounds) {
+    if (targetObj && targetObj.origin === 'pdf_source' && !targetObj.isModified && initialBounds) {
       // Create a solid background mask over the source coordinates to erase the original canvas image/text
       const maskShape: ShapeObject = {
         id: `mask_${Date.now()}`,
@@ -266,7 +266,7 @@ export const App: React.FC = () => {
     const targetObj = activePage?.objects.find((o) => o.id === objectId);
     let newDoc = doc;
 
-    if (targetObj && targetObj.origin === 'pdf_source' && oldBounds) {
+    if (targetObj && targetObj.origin === 'pdf_source' && !targetObj.isModified && oldBounds) {
       const maskShape: ShapeObject = {
         id: `mask_${Date.now()}`,
         type: 'shape',
