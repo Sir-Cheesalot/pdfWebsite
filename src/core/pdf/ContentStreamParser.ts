@@ -22,6 +22,7 @@ import {
 } from '../types/model';
 import { CoordinateSystem } from '../coords/CoordinateSystem';
 import { FontFamilyHelper } from '../fonts/FontFamilyHelper';
+import { FlateDecoder } from './FlateDecoder';
 import { FontEngine } from './FontEngine';
 import { PdfLexer } from './PdfLexer';
 import { PdfParser } from './PdfParser';
@@ -914,19 +915,33 @@ export class ContentStreamParser {
     const width = Number(xobj.dict.get('Width') || 100);
     const height = Number(xobj.dict.get('Height') || 100);
     const filter = xobj.dict.get('Filter');
-    const filterName = filter instanceof PdfName ? filter.value : '';
+    
+    let isJpeg = false;
+    if (filter instanceof PdfName) {
+      const v = filter.value;
+      isJpeg = v === 'DCTDecode' || v === 'DCT' || v === 'JPXDecode';
+    } else if (Array.isArray(filter)) {
+      isJpeg = filter.some((f) => {
+        const v = f instanceof PdfName ? f.value : String(f).replace(/^\//, '');
+        return v === 'DCTDecode' || v === 'DCT' || v === 'JPXDecode';
+      });
+    }
 
-    let mimeType = 'image/png';
+    let mimeType = isJpeg ? 'image/jpeg' : 'image/png';
     let dataUrl = '';
 
-    if (filterName === 'DCTDecode' || filterName === 'JPXDecode') {
-      mimeType = 'image/jpeg';
-      // Convert JPEG buffer to base64
+    if (isJpeg) {
       dataUrl = `data:image/jpeg;base64,${this.uint8ToBase64(xobj.data)}`;
     } else {
-      // Decode raw bitmap or Flate decoded RGB
-      const raw = xobj.decodedData || xobj.data;
-      dataUrl = this.rawRgbToDataUrl(raw, width, height);
+      const raw = xobj.decodedData || FlateDecoder.decodeStream(xobj);
+      const colorSpace = xobj.dict.get('ColorSpace');
+      const csName = colorSpace instanceof PdfName
+        ? colorSpace.value
+        : Array.isArray(colorSpace) && colorSpace[0] instanceof PdfName
+        ? colorSpace[0].value
+        : 'DeviceRGB';
+      const bpc = Number(xobj.dict.get('BitsPerComponent') || 8);
+      dataUrl = this.rawRgbToDataUrl(raw, width, height, csName, bpc);
     }
 
     // PDF image dimension in user units is determined by CTM:
@@ -973,8 +988,15 @@ export class ContentStreamParser {
     return btoa(binary);
   }
 
-  private rawRgbToDataUrl(data: Uint8Array, width: number, height: number): string {
-    // Render to an offscreen canvas to generate PNG data URL
+  private rawRgbToDataUrl(
+    data: Uint8Array,
+    width: number,
+    height: number,
+    colorSpace: string = 'DeviceRGB',
+    bitsPerComponent: number = 8
+  ): string {
+    if (!data || data.length === 0 || width <= 0 || height <= 0) return '';
+
     try {
       if (typeof document !== 'undefined') {
         const canvas = document.createElement('canvas');
@@ -983,21 +1005,62 @@ export class ContentStreamParser {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           const imgData = ctx.createImageData(width, height);
-          const isRGB = data.length >= width * height * 3;
-          const isGray = data.length >= width * height;
+          const isCMYK = colorSpace.includes('CMYK') || (!colorSpace.includes('RGB') && !colorSpace.includes('Gray') && data.length >= width * height * 4);
+          const isGray = colorSpace.includes('Gray') || colorSpace.includes('DeviceGray') || (data.length < width * height * 3 && !isCMYK);
 
-          for (let i = 0; i < width * height; i++) {
-            if (isRGB) {
-              imgData.data[i * 4] = data[i * 3];
-              imgData.data[i * 4 + 1] = data[i * 3 + 1];
-              imgData.data[i * 4 + 2] = data[i * 3 + 2];
-              imgData.data[i * 4 + 3] = 255;
-            } else if (isGray) {
-              const val = data[i];
-              imgData.data[i * 4] = val;
-              imgData.data[i * 4 + 1] = val;
-              imgData.data[i * 4 + 2] = val;
-              imgData.data[i * 4 + 3] = 255;
+          if (bitsPerComponent === 1) {
+            // 1-bit monochrome mask: each row is padded to byte boundaries
+            const rowStride = Math.ceil(width / 8);
+            for (let y = 0; y < height; y++) {
+              const rowOffset = y * rowStride;
+              for (let x = 0; x < width; x++) {
+                const byteIdx = rowOffset + Math.floor(x / 8);
+                const bitOffset = 7 - (x % 8);
+                const bit = byteIdx < data.length ? ((data[byteIdx] >> bitOffset) & 1) : 0;
+                const val = bit ? 255 : 0;
+                const outIdx = (y * width + x) * 4;
+                imgData.data[outIdx] = val;
+                imgData.data[outIdx + 1] = val;
+                imgData.data[outIdx + 2] = val;
+                imgData.data[outIdx + 3] = 255;
+              }
+            }
+          } else if (isCMYK) {
+            // CMYK (4 bytes per pixel) -> standard RGB conversion
+            for (let i = 0; i < width * height; i++) {
+              const c = (data[i * 4] || 0) / 255;
+              const m = (data[i * 4 + 1] || 0) / 255;
+              const y = (data[i * 4 + 2] || 0) / 255;
+              const k = (data[i * 4 + 3] || 0) / 255;
+
+              const r = Math.round(255 * (1 - c) * (1 - k));
+              const g = Math.round(255 * (1 - m) * (1 - k));
+              const b = Math.round(255 * (1 - y) * (1 - k));
+
+              const outIdx = i * 4;
+              imgData.data[outIdx] = r;
+              imgData.data[outIdx + 1] = g;
+              imgData.data[outIdx + 2] = b;
+              imgData.data[outIdx + 3] = 255;
+            }
+          } else if (isGray) {
+            // Grayscale (1 byte per pixel)
+            for (let i = 0; i < width * height; i++) {
+              const val = data[i] ?? 0;
+              const outIdx = i * 4;
+              imgData.data[outIdx] = val;
+              imgData.data[outIdx + 1] = val;
+              imgData.data[outIdx + 2] = val;
+              imgData.data[outIdx + 3] = 255;
+            }
+          } else {
+            // Default DeviceRGB (3 bytes per pixel)
+            for (let i = 0; i < width * height; i++) {
+              const outIdx = i * 4;
+              imgData.data[outIdx] = data[i * 3] ?? 0;
+              imgData.data[outIdx + 1] = data[i * 3 + 1] ?? 0;
+              imgData.data[outIdx + 2] = data[i * 3 + 2] ?? 0;
+              imgData.data[outIdx + 3] = 255;
             }
           }
           ctx.putImageData(imgData, 0, 0);
