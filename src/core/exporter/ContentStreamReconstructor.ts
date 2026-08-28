@@ -67,7 +67,7 @@ export class ContentStreamReconstructor {
       }
     }
 
-    const userCreatedObjects: EditableObject[] = page.objects.filter((o) => o.origin === 'user_created' && o.visible);
+    const userCreatedObjects: EditableObject[] = page.objects.filter((o) => o.origin === 'user_created' && o.visible && !o.id.startsWith('mask_'));
 
     // Group tracked pdf_source objects by the stream they came from, keyed by
     // their startOpIndex WITHIN that stream (matches how interpretPage assigns
@@ -417,8 +417,8 @@ export class ContentStreamReconstructor {
     // Generate or use resource name
     const xobjKey = imgObj.resourceName ? imgObj.resourceName.replace(/^\//, '') : `Im_Edit_${imgObj.id.replace(/\W/g, '_')}`;
     
-    // Create new PDF Image XObject stream if newly created
-    if (imgObj.src && !newXObjects.has(xobjKey)) {
+    // Create new PDF Image XObject stream if user-created or if not from source PDF
+    if (imgObj.src && !imgObj.sourcePdfRef && !newXObjects.has(xobjKey)) {
       const imgStream = this.createImageXObjectStream(imgObj);
       if (imgStream) {
         newXObjects.set(xobjKey, imgStream);

@@ -254,7 +254,6 @@ export const App: React.FC = () => {
       };
       const insertMaskCmd = new InsertObjectCommand(activePageIndex, maskShape);
       newDoc = commandManager.execute(insertMaskCmd, newDoc);
-      targetObj.origin = 'user_created';
     }
 
     const cmd = new MoveObjectCommand(activePageIndex, objectId, dxPdf, dyPdf);
@@ -288,7 +287,6 @@ export const App: React.FC = () => {
       };
       const insertMaskCmd = new InsertObjectCommand(activePageIndex, maskShape);
       newDoc = commandManager.execute(insertMaskCmd, newDoc);
-      targetObj.origin = 'user_created';
     }
 
     const cmd = new ResizeObjectCommand(activePageIndex, objectId, newBounds, oldBounds);

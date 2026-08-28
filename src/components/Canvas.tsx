@@ -221,7 +221,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             newPdfY,
           ],
           isModified: true,
-          origin: 'user_created',
         });
       } else if (activeDrag.type === 'resize' && activeDrag.handle) {
         let newW = activeDrag.initialBounds.width;
@@ -343,7 +342,11 @@ export const Canvas: React.FC<CanvasProps> = ({
               }}
               className={`group transition-all ${
                 isSelected && !isEditingText
-                  ? 'ring-1.5 ring-[#0071e3] bg-[#0071e3]/10 rounded shadow-xs'
+                  ? obj.type === 'image'
+                    ? 'ring-1.5 ring-[#0071e3] rounded shadow-xs'
+                    : 'ring-1.5 ring-[#0071e3] bg-[#0071e3]/10 rounded shadow-xs'
+                  : obj.type === 'image'
+                  ? 'hover:ring-1 hover:ring-[#0071e3]/40 rounded'
                   : 'hover:ring-1 hover:ring-[#0071e3]/40 hover:bg-[#0071e3]/5 rounded'
               } ${obj.locked ? 'cursor-not-allowed' : obj.type === 'text' ? 'cursor-text' : 'cursor-move'}`}
             >
