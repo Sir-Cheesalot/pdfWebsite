@@ -6,6 +6,7 @@ import { PdfWriter } from '../exporter/PdfWriter';
 import { ContentStreamReconstructor } from '../exporter/ContentStreamReconstructor';
 import { DocumentModel, ImageObject, PageModel } from '../types/model';
 import { PdfDict, PdfName, PdfStream } from '../types/pdf';
+import { DocumentModelManager } from '../model/DocumentModel';
 
 // Helper to create a valid 2x2 RGB PNG in pure bytes
 function create2x2RgbPng(r: number, g: number, b: number): Uint8Array {
@@ -261,5 +262,91 @@ describe('Modified Image Export & Canonical Image Reconstruction', () => {
     expect(pdfStr).toContain('/Subtype /Image');
     expect(pdfStr).toContain('/ColorSpace /DeviceRGB');
     expect(pdfStr).toContain('/SMask');
+  });
+
+  it('Roundtrip: Loads an exported PDF with an image, moves the image, and re-exports accurately', async () => {
+    const pngBytes = create2x2RgbPng(12, 34, 56);
+    const dataUrl = `data:image/png;base64,${uint8ToBase64(pngBytes)}`;
+
+    const initialImg: ImageObject = {
+      id: 'img_initial',
+      type: 'image',
+      origin: 'user_created',
+      pageIndex: 0,
+      pdfBounds: { x: 50, y: 100, width: 200, height: 150 },
+      matrix: [1, 0, 0, 1, 50, 100],
+      rotation: 0,
+      zIndex: 1,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      src: dataUrl,
+      width: 200,
+      height: 150,
+      naturalWidth: 2,
+      naturalHeight: 2,
+      mimeType: 'image/png',
+      isModified: true,
+    };
+
+    const doc: DocumentModel = {
+      id: 'doc_roundtrip_1',
+      title: 'roundtrip.pdf',
+      version: '1.7',
+      pages: [
+        {
+          pageIndex: 0,
+          width: 612,
+          height: 792,
+          mediaBox: [0, 0, 612, 792],
+          rotation: 0,
+          objects: [initialImg],
+          rawContentStreamIndices: [],
+          unhandledOperatorsCount: 0,
+        },
+      ],
+      fonts: new Map(),
+      isDirty: true,
+      activePageIndex: 0,
+    };
+
+    const writer1 = new PdfWriter();
+    const pdf1Bytes = writer1.exportDocument(doc);
+    expect(pdf1Bytes.length).toBeGreaterThan(500);
+
+    // Load PDF back with DocumentModelManager
+    const { doc: loadedDoc } = await DocumentModelManager.loadPdfFromBuffer(pdf1Bytes.buffer as ArrayBuffer, 'roundtrip.pdf');
+    expect(loadedDoc.pages.length).toBe(1);
+    
+    // Find the image in loaded page
+    const foundImg = loadedDoc.pages[0].objects.find((o) => o.type === 'image') as ImageObject;
+    expect(foundImg).toBeDefined();
+    expect(foundImg.origin).toBe('pdf_source');
+    expect(foundImg.pdfBounds.x).toBeCloseTo(50, 1);
+    expect(foundImg.pdfBounds.y).toBeCloseTo(100, 1);
+
+    // Move the image by (+100, +200)
+    foundImg.pdfBounds.x += 100;
+    foundImg.pdfBounds.y += 200;
+    foundImg.matrix[4] += 100;
+    foundImg.matrix[5] += 200;
+    foundImg.isModified = true;
+
+    // Re-export modified PDF
+    const writer2 = new PdfWriter(loadedDoc.sourcePdf);
+    const pdf2Bytes = writer2.exportDocument(loadedDoc);
+    expect(pdf2Bytes.length).toBeGreaterThan(500);
+
+    // Verify content of re-exported PDF
+    const pdf2Str = new TextDecoder().decode(pdf2Bytes);
+    expect(pdf2Str).toContain('%PDF-1.7');
+    expect(pdf2Str).toContain('/Subtype /Image');
+
+    // Parse the re-exported PDF again to verify new coordinates
+    const { doc: reloadedDoc } = await DocumentModelManager.loadPdfFromBuffer(pdf2Bytes.buffer as ArrayBuffer, 'roundtrip2.pdf');
+    const movedReloadedImg = reloadedDoc.pages[0].objects.find((o) => o.type === 'image') as ImageObject;
+    expect(movedReloadedImg).toBeDefined();
+    expect(movedReloadedImg.pdfBounds.x).toBeCloseTo(150, 1);
+    expect(movedReloadedImg.pdfBounds.y).toBeCloseTo(300, 1);
   });
 });
