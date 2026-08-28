@@ -267,15 +267,30 @@ export const App: React.FC = () => {
     const oldObj = activePage.objects.find((o) => o.id === selectedObjectId);
     if (!oldObj) return;
 
+    // When font family changes, reset font-specific spacing that was calibrated
+    // for the original font's character widths (Tc/Tw operators in PDF).
+    const propsToApply = { ...updatedProps } as any;
+    if ('fontName' in propsToApply && oldObj.type === 'text') {
+      const textObj = oldObj as TextObject;
+      if (propsToApply.fontName !== textObj.fontName) {
+        if (textObj.charSpacing && !('charSpacing' in updatedProps)) {
+          propsToApply.charSpacing = 0;
+        }
+        if (textObj.wordSpacing && !('wordSpacing' in updatedProps)) {
+          propsToApply.wordSpacing = 0;
+        }
+      }
+    }
+
     const oldProps: any = {};
-    for (const key of Object.keys(updatedProps)) {
+    for (const key of Object.keys(propsToApply)) {
       oldProps[key] = (oldObj as any)[key];
     }
 
-    const cmd = new ChangeStyleCommand(activePageIndex, selectedObjectId, updatedProps as any, oldProps);
+    const cmd = new ChangeStyleCommand(activePageIndex, selectedObjectId, propsToApply, oldProps);
     const newDoc = commandManager.execute(cmd, doc);
     setDoc(newDoc);
-    addLog('EDIT', `Updated properties for "${selectedObjectId}"`, Object.keys(updatedProps));
+    addLog('EDIT', `Updated properties for "${selectedObjectId}"`, Object.keys(propsToApply));
   };
 
   const handleCommitTableCellEdit = (tableId: string, row: number, col: number, newText: string) => {

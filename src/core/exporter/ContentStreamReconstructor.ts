@@ -349,8 +349,7 @@ export class ContentStreamReconstructor {
     if (!fontKey) {
       // 2. Fallback: dynamically match Standard 14 PDF fonts based on original font name & style
       fontKey = this.getBestStandardFont(textObj.fontName, textObj.bold || false, textObj.italic || false);
-      const escaped = this.escapePdfString(textObj.text);
-      textOp = `(${escaped}) Tj`;
+      textOp = `${this.encodeWinAnsi(textObj.text)} Tj`;
     }
 
     lines.push(`${fontKey} ${textObj.fontSize.toFixed(2)} Tf`);
@@ -531,7 +530,7 @@ export class ContentStreamReconstructor {
             const textY = cellPdfY + (rowH / 2) - (cell.fontSize / 3);
 
             lines.push(`1 0 0 1 ${textX.toFixed(2)} ${textY.toFixed(2)} Tm`);
-            lines.push(`(${this.escapePdfString(cell.text)}) Tj`);
+            lines.push(`${this.encodeWinAnsi(cell.text)} Tj`);
             lines.push('ET');
             lines.push('Q');
           }
@@ -641,5 +640,103 @@ export class ContentStreamReconstructor {
       .replace(/\)/g, '\\)')
       .replace(/\r/g, '\\r')
       .replace(/\n/g, '\\n');
+  }
+
+  /**
+   * Unicode code point → WinAnsiEncoding byte value.
+   * Standard 14 PDF fonts (Helvetica, Times, Courier, etc.) use WinAnsiEncoding.
+   * Characters 0x20–0x7E map directly (ASCII). Characters above need explicit mapping.
+   */
+  private static readonly UNICODE_TO_WINANSI: Record<number, number> = {
+    // C1 control area re-used by Windows-1252 / WinAnsiEncoding
+    0x20AC: 0x80, // € Euro sign
+    0x201A: 0x82, // ‚ single low-9 quotation
+    0x0192: 0x83, // ƒ Latin small f with hook
+    0x201E: 0x84, // „ double low-9 quotation
+    0x2026: 0x85, // … horizontal ellipsis
+    0x2020: 0x86, // † dagger
+    0x2021: 0x87, // ‡ double dagger
+    0x02C6: 0x88, // ˆ modifier letter circumflex
+    0x2030: 0x89, // ‰ per mille sign
+    0x0160: 0x8A, // Š S with caron
+    0x2039: 0x8B, // ‹ single left-pointing angle quotation
+    0x0152: 0x8C, // Œ OE ligature
+    0x017D: 0x8E, // Ž Z with caron
+    0x2018: 0x91, // ' left single quotation
+    0x2019: 0x92, // ' right single quotation (apostrophe)
+    0x201C: 0x93, // " left double quotation
+    0x201D: 0x94, // " right double quotation
+    0x2022: 0x95, // • bullet
+    0x2013: 0x96, // – en dash
+    0x2014: 0x97, // — em dash
+    0x02DC: 0x98, // ˜ small tilde
+    0x2122: 0x99, // ™ trade mark sign
+    0x0161: 0x9A, // š s with caron
+    0x203A: 0x9B, // › single right-pointing angle quotation
+    0x0153: 0x9C, // œ oe ligature
+    0x017E: 0x9E, // ž z with caron
+    0x0178: 0x9F, // Ÿ Y with diaeresis
+    // Latin-1 Supplement (0xA0–0xFF) maps 1:1 in WinAnsiEncoding
+    // Common ligatures → approximate with multi-char or closest equivalent
+    0xFB01: 0x66, // fi ligature → 'f' (best single-byte approximation)
+    0xFB02: 0x66, // fl ligature → 'f'
+  };
+
+  /**
+   * Encode a Unicode string into WinAnsiEncoding bytes for Standard 14 PDF fonts.
+   * Returns a hex-encoded PDF string like <hex>.
+   * Characters that can't be mapped are replaced with '?' (0x3F).
+   */
+  private encodeWinAnsi(text: string): string {
+    const bytes: number[] = [];
+    for (let i = 0; i < text.length; i++) {
+      const cp = text.codePointAt(i)!;
+      // Skip high surrogate pair continuation
+      if (cp > 0xFFFF) { i++; }
+
+      let byte: number;
+      if (cp >= 0x20 && cp <= 0x7E) {
+        // ASCII printable range: direct mapping
+        byte = cp;
+      } else if (cp >= 0xA0 && cp <= 0xFF) {
+        // Latin-1 Supplement: 1:1 mapping in WinAnsiEncoding
+        byte = cp;
+      } else if (cp === 0x0A || cp === 0x0D || cp === 0x09) {
+        // Whitespace: newline, carriage return, tab
+        byte = cp;
+      } else {
+        // Look up in the explicit mapping table
+        byte = ContentStreamReconstructor.UNICODE_TO_WINANSI[cp] ?? 0x3F; // '?' fallback
+      }
+      bytes.push(byte);
+    }
+
+    // Handle ligatures: expand fi/fl to two characters for proper text
+    const expanded: number[] = [];
+    for (let i = 0; i < text.length; i++) {
+      const cp = text.codePointAt(i)!;
+      if (cp > 0xFFFF) { i++; }
+
+      if (cp === 0xFB01) {
+        expanded.push(0x66, 0x69); // 'f', 'i'
+      } else if (cp === 0xFB02) {
+        expanded.push(0x66, 0x6C); // 'f', 'l'
+      } else if (cp >= 0x20 && cp <= 0x7E) {
+        expanded.push(cp);
+      } else if (cp >= 0xA0 && cp <= 0xFF) {
+        expanded.push(cp);
+      } else if (cp === 0x0A || cp === 0x0D || cp === 0x09) {
+        expanded.push(cp);
+      } else {
+        expanded.push(ContentStreamReconstructor.UNICODE_TO_WINANSI[cp] ?? 0x3F);
+      }
+    }
+
+    // Build hex string
+    let hex = '';
+    for (const b of expanded) {
+      hex += b.toString(16).padStart(2, '0');
+    }
+    return `<${hex}>`;
   }
 }
